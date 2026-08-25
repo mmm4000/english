@@ -1,5 +1,16 @@
 {
   "rewrites": [
-    { "source": "/(.*)", "destination": "/index.html" }
+    {
+      "source": "/api/dict/:path*",
+      "destination": "https://api.dictionaryapi.dev/api/v2/entries/en/:path*"
+    },
+    {
+      "source": "/api/translate",
+      "destination": "https://translate.googleapis.com/translate_a/single"
+    },
+    {
+      "source": "/(.*)",
+      "destination": "/index.html"
+    }
   ]
 }

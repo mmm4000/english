@@ -63,7 +63,7 @@ function getActiveMeaning(card) {
 async function translateToZh(text) {
   if (!text) return '';
   try {
-    const url = `/api/translate?client=gtx&sl=en&tl=zh-TW&dt=t&q=${encodeURIComponent(text)}`;
+    const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=zh-TW&dt=t&q=${encodeURIComponent(text)}`;
     const res = await fetch(url);
     if (!res.ok) throw new Error(`Google ${res.status}`);
     const data = await res.json();
@@ -174,9 +174,10 @@ function posPriority(pos) {
 }
 
 async function lookupWord(word) {
+  const queryWord = word.trim().toLowerCase();
   const [dictData, wordZh] = await Promise.all([
-    fetch(`/api/dict/${encodeURIComponent(word)}`).then(r => r.ok ? r.json() : null),
-    translateToZh(word),
+    fetch(`https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(queryWord)}`).then(r => r.ok ? r.json() : null),
+    translateToZh(queryWord),
   ]);
   if (!dictData || dictData.length === 0) return null;
 
