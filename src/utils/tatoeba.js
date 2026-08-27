@@ -1,4 +1,4 @@
-const TATOEBA_API = '/api/tatoeba';
+const TATOEBA_API = 'https://tatoeba.org/en/api_v0/search';
 
 export async function fetchTatoebaExamples(word) {
   try {

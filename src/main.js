@@ -176,10 +176,28 @@ function posPriority(pos) {
 async function lookupWord(word) {
   const queryWord = word.trim().toLowerCase();
   const [dictData, wordZh] = await Promise.all([
-    fetch(`https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(queryWord)}`).then(r => r.ok ? r.json() : null),
+    fetch(`https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(queryWord)}`)
+      .then(r => r.ok ? r.json() : null)
+      .catch(() => null),
     translateToZh(queryWord),
   ]);
-  if (!dictData || dictData.length === 0) return null;
+  if (!dictData || dictData.length === 0) {
+    if (wordZh) {
+      return {
+        phonetic: '',
+        meanings: [{
+          partOfSpeech: '',
+          definition_en: `Meaning of "${queryWord}"`,
+          translation_zh: wordZh,
+          example_en: '',
+          example_zh: '',
+        }],
+        verb_forms: null,
+        wordZh,
+      };
+    }
+    return null;
+  }
 
   /* Collect phonetic from first available entry */
   let phonetic = '';
