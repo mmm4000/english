@@ -4,6 +4,7 @@ import { getVerbForms, isLikelyVerb } from './utils/conjugations.js';
 import { fetchTatoebaExamples } from './utils/tatoeba.js';
 import { getLocalExample, generateAutoExample } from './utils/examples.js';
 import { generateListeningQuestions, getListeningBankSize } from './utils/listeningGenerator.js';
+import { lookupWord } from './api/dictionary.js';
 
 const $ = (sel) => document.querySelector(sel);
 const app = () => $('#app');
@@ -182,178 +183,6 @@ async function translateMeaningsInBackground(meanings, word) {
       pendingLookups[0].meanings = meanings;
     }
   }
-}
-
-/* ─── Dictionary Lookup (Optimized) ─── */
-const COMMON_POS_ORDER = ['verb', 'noun', 'adjective', 'adverb', 'pronoun', 'preposition', 'conjunction', 'interjection'];
-
-function posPriority(pos) {
-  const p = (pos || '').toLowerCase();
-  const idx = COMMON_POS_ORDER.indexOf(p);
-  return idx >= 0 ? idx : 99;
-}
-
-async function lookupWord(word) {
-  const queryWord = word.trim().toLowerCase();
-  const dictPromise = fetch(`https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(queryWord)}`)
-    .then(r => r.ok ? r.json() : null)
-    .catch(() => null);
-  const timeoutPromise = new Promise(resolve => setTimeout(() => resolve(null), 8000));
-  const [dictData, wordZh] = await Promise.all([
-    Promise.race([dictPromise, timeoutPromise]),
-    translateToZh(queryWord),
-  ]);
-  if (!dictData || dictData.length === 0) {
-    if (wordZh) {
-      return {
-        phonetic: '',
-        meanings: [{
-          partOfSpeech: '',
-          definition_en: `Meaning of "${queryWord}"`,
-          translation_zh: wordZh,
-          example_en: '',
-          example_zh: '',
-        }],
-        verb_forms: null,
-        wordZh,
-      };
-    }
-    return null;
-  }
-
-  /* Collect phonetic from first available entry */
-  let phonetic = '';
-  for (const entry of dictData) {
-    phonetic = entry.phonetic || (entry.phonetics && entry.phonetics.find(p => p.text)?.text) || '';
-    if (phonetic) break;
-  }
-
-  /* Iterate ALL entries and ALL meanings to collect every POS */
-  const rawMeanings = [];
-  for (const entry of dictData) {
-    for (const m of entry.meanings || []) {
-      rawMeanings.push(m);
-    }
-  }
-
-  const posGroups = {};
-  for (const meaning of rawMeanings) {
-    const pos = (meaning.partOfSpeech || '').toLowerCase();
-    if (!posGroups[pos]) posGroups[pos] = { pos: meaning.partOfSpeech, definitions: [] };
-    for (const def of meaning.definitions || []) {
-      const definition_en = (def.definition || '').trim();
-      if (!definition_en) continue;
-      const example_en = (def.example || '').trim() || '';
-      posGroups[pos].definitions.push({ definition_en, example_en });
-    }
-  }
-
-  const sortedPos = Object.values(posGroups).sort((a, b) => posPriority(a.pos) - posPriority(b.pos));
-
-  const meanings = [];
-  const seenDef = new Set();
-  const MAX_PER_POS = 2;
-  const MAX_TOTAL = 6;
-
-  /* First pass: ensure each POS gets at least 1 definition */
-  for (const group of sortedPos) {
-    for (const d of group.definitions) {
-      if (seenDef.has(d.definition_en)) continue;
-      seenDef.add(d.definition_en);
-      meanings.push({
-        partOfSpeech: group.pos,
-        definition_en: d.definition_en,
-        translation_zh: '',
-        example_en: d.example_en,
-        example_zh: '',
-      });
-      break;
-    }
-  }
-
-  /* Second pass: fill remaining slots up to MAX_TOTAL, max MAX_PER_POS per POS */
-  const posCount = {};
-  for (const group of sortedPos) {
-    const posLower = group.pos.toLowerCase();
-    let count = posCount[posLower] || 0;
-    for (const d of group.definitions) {
-      if (meanings.length >= MAX_TOTAL) break;
-      if (count >= MAX_PER_POS) break;
-      if (seenDef.has(d.definition_en)) continue;
-      seenDef.add(d.definition_en);
-      meanings.push({
-        partOfSpeech: group.pos,
-        definition_en: d.definition_en,
-        translation_zh: '',
-        example_en: d.example_en,
-        example_zh: '',
-      });
-      count++;
-    }
-    posCount[posLower] = count;
-    if (meanings.length >= MAX_TOTAL) break;
-  }
-
-  if (meanings.length === 0) {
-    meanings.push({
-      partOfSpeech: '',
-      definition_en: `A word meaning "${word}".`,
-      translation_zh: '',
-      example_en: '',
-      example_zh: '',
-    });
-  }
-
-  /* ─── 4-Level Example Fallback Pipeline ─── */
-  const needsExample = meanings.filter(m => !m.example_en || m.example_en.length <= 15);
-  if (needsExample.length > 0) {
-    for (const m of needsExample) {
-      let filled = false;
-      /* Level 2: Local examples database */
-      const local = getLocalExample(word);
-      if (local) {
-        m.example_en = local.en;
-        m.example_zh = local.zh;
-        filled = true;
-      }
-      /* Level 3: Tatoeba API */
-      if (!filled) {
-        try {
-          const tatoebaResults = await fetchTatoebaExamples(word);
-          if (tatoebaResults.length > 0) {
-            m.example_en = tatoebaResults[0].example_en;
-            m.example_zh = tatoebaResults[0].example_zh;
-            filled = true;
-          }
-        } catch (_) {}
-      }
-      /* Level 4: Auto-generated example */
-      if (!filled) {
-        const auto = generateAutoExample(word, m.partOfSpeech);
-        m.example_en = auto.en;
-        m.example_zh = auto.zh;
-      }
-    }
-  }
-
-  const hasVerbMeaning = meanings.some(m => m.partOfSpeech.toLowerCase() === 'verb');
-  const verb_forms = (isLikelyVerb(rawMeanings) && hasVerbMeaning) ? getVerbForms(word) : null;
-
-  /* Translate ALL meanings' definition_en and example_en */
-  const transTexts = [];
-  for (const m of meanings) {
-    transTexts.push(m.definition_en || '');
-    transTexts.push(m.example_en || '');
-  }
-  const transResults = await batchTranslate(transTexts);
-  let tIdx = 0;
-  for (const m of meanings) {
-    m.translation_zh = transResults[tIdx++] || '';
-    m.example_zh = transResults[tIdx++] || '';
-    if (!m.translation_zh && wordZh) m.translation_zh = wordZh;
-  }
-
-  return { phonetic, meanings, verb_forms, wordZh };
 }
 
 /* ─── Rendering ─── */
@@ -1191,7 +1020,7 @@ function bindEvents() {
 
         try {
           const data = await lookupWord(word);
-          if (!data || !data.meanings || data.meanings.length === 0) {
+          if (!data) {
             toast('無法自動取得釋義，請手動填寫');
             $('#add-fields').style.display = 'block';
             pendingLookups = [];
@@ -1200,36 +1029,37 @@ function bindEvents() {
             return;
           }
 
-          pendingLookups = [{ word: w, phonetic: data.phonetic, meanings: data.meanings, verb_forms: data.verb_forms, wordZh: data.wordZh || '' }];
+          pendingLookups = [{
+            word: w,
+            phonetic: data.phonetic,
+            meanings: [{
+              partOfSpeech: data.partOfSpeech,
+              definition_en: data.definition,
+              translation_zh: data.translation,
+              example_en: data.example,
+              example_zh: '',
+            }],
+            verb_forms: null,
+            wordZh: data.translation || '',
+          }];
 
-          if (data.meanings.length > 1) {
-            $('#add-meanings').style.display = 'block';
-            $('#add-fields').style.display = 'none';
-            const vfContainer = $('#add-verb-forms');
-            if (vfContainer) vfContainer.innerHTML = renderVerbFormsChips(data.verb_forms);
-            $('#meanings-list').innerHTML = renderMeaningsList(data.meanings);
-          } else {
-            $('#add-fields').style.display = 'block';
-            $('#add-meanings').style.display = 'none';
-            const m = data.meanings[0] || {};
-            requestAnimationFrame(() => {
-              const phonInp = document.getElementById('inp-phonetic');
-              const zhInp = document.getElementById('inp-zh');
-              const defInp = document.getElementById('inp-def');
-              const exInp = document.getElementById('inp-ex');
-              const exZhEl = document.getElementById('inp-ex-zh');
-              if (phonInp) phonInp.value = data.phonetic || '';
-              if (zhInp) zhInp.value = data.wordZh || m.translation_zh || '';
-              if (defInp) defInp.value = m.definition_en || '';
-              if (exInp) exInp.value = m.example_en || '';
-              if (exZhEl) exZhEl.textContent = m.example_zh || '';
-            });
-          }
+          $('#add-fields').style.display = 'block';
+          $('#add-meanings').style.display = 'none';
+          requestAnimationFrame(() => {
+            const phonInp = document.getElementById('inp-phonetic');
+            const zhInp = document.getElementById('inp-zh');
+            const defInp = document.getElementById('inp-def');
+            const exInp = document.getElementById('inp-ex');
+            const exZhEl = document.getElementById('inp-ex-zh');
+            if (phonInp) phonInp.value = data.phonetic || '';
+            if (zhInp) zhInp.value = data.translation || '';
+            if (defInp) defInp.value = data.definition || '';
+            if (exInp) exInp.value = data.example || '';
+            if (exZhEl) exZhEl.textContent = '';
+          });
 
           status.textContent = '';
           btnLookup.disabled = false;
-
-          translateMeaningsInBackground(data.meanings, word);
         } catch (_) {
           toast('無法自動取得釋義，請手動填寫');
           $('#add-fields').style.display = 'block';
@@ -1291,8 +1121,6 @@ function bindEvents() {
 
     if (btnAdd) {
       btnAdd.onclick = async () => {
-        const chosenRadio = document.querySelector('input[name="meaning-choice"]:checked');
-        const chosenIdx = chosenRadio ? parseInt(chosenRadio.value) : 0;
         const lookup = pendingLookups[0];
         if (!lookup || !lookup.meanings || lookup.meanings.length === 0) {
           toast('No meaning data available');
@@ -1319,7 +1147,7 @@ function bindEvents() {
           phonetic: lookup.phonetic,
           meanings,
           verb_forms: lookup.verb_forms || null,
-          selected_meaning_index: Math.min(chosenIdx, meanings.length - 1),
+          selected_meaning_index: 0,
           repetition: 0,
           interval: 0,
           ease_factor: 2.5,
