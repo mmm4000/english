@@ -376,6 +376,10 @@ function renderAdd() {
         </div>
       </div>
       <div id="add-fields" style="display:none;">
+        <div id="meaning-selector-wrap" style="display:none;margin-bottom:.8rem;">
+          <label style="color:#94a3b8;font-size:.8rem;display:block;margin-bottom:.3rem;">釋義切換</label>
+          <select id="meaning-select" style="width:100%;padding:.7rem;border:1px solid #334155;border-radius:.5rem;background:#1e293b;color:#f8fafc;font-size:.95rem;"></select>
+        </div>
         <input id="inp-phonetic" placeholder="Phonetic (auto-filled)" style="width:100%;padding:.8rem;border:1px solid #334155;border-radius:.5rem;background:#1e293b;color:#f8fafc;font-size:1rem;margin-bottom:.5rem;" />
         <input id="inp-zh" placeholder="繁體中文翻譯 (auto-filled)" style="width:100%;padding:.8rem;border:1px solid #334155;border-radius:.5rem;background:#1e293b;color:#f8fafc;font-size:1rem;margin-bottom:.5rem;" />
         <textarea id="inp-def" placeholder="English Definition (auto-filled)" rows="2" style="width:100%;padding:.8rem;border:1px solid #334155;border-radius:.5rem;background:#1e293b;color:#f8fafc;font-size:1rem;margin-bottom:.5rem;"></textarea>
@@ -1020,29 +1024,35 @@ function bindEvents() {
 
         try {
           const data = await lookupWord(word);
-          if (!data) {
+          if (!data || !data.meanings || data.meanings.length === 0) {
             toast('無法自動取得釋義，請手動填寫');
             $('#add-fields').style.display = 'block';
+            $('#meaning-selector-wrap').style.display = 'none';
             pendingLookups = [];
             status.textContent = '';
             btnLookup.disabled = false;
             return;
           }
 
+          // 將 API 回傳的 meanings 轉成 card 格式
+          const cardMeanings = data.meanings.map(m => ({
+            partOfSpeech: m.partOfSpeech,
+            definition_en: m.definition,
+            translation_zh: m.translation,
+            example_en: m.example,
+            example_zh: '',
+          }));
+
           pendingLookups = [{
             word: w,
             phonetic: data.phonetic,
-            meanings: [{
-              partOfSpeech: data.partOfSpeech,
-              definition_en: data.definition,
-              translation_zh: data.translation,
-              example_en: data.example,
-              example_zh: '',
-            }],
+            meanings: cardMeanings,
             verb_forms: null,
-            wordZh: data.translation || '',
+            selected_meaning_index: 0,
           }];
 
+          // 填入第一筆釋義到表單
+          const first = cardMeanings[0];
           $('#add-fields').style.display = 'block';
           $('#add-meanings').style.display = 'none';
           requestAnimationFrame(() => {
@@ -1052,18 +1062,37 @@ function bindEvents() {
             const exInp = document.getElementById('inp-ex');
             const exZhEl = document.getElementById('inp-ex-zh');
             if (phonInp) phonInp.value = data.phonetic || '';
-            if (zhInp) zhInp.value = data.translation || '';
-            if (defInp) defInp.value = data.definition || '';
-            if (exInp) exInp.value = data.example || '';
+            if (zhInp) zhInp.value = first.translation_zh || '';
+            if (defInp) defInp.value = first.definition_en || '';
+            if (exInp) exInp.value = first.example_en || '';
             if (exZhEl) exZhEl.textContent = '';
           });
+
+          // 填入釋義切換下拉選單
+          const selWrap = document.getElementById('meaning-selector-wrap');
+          const sel = document.getElementById('meaning-select');
+          if (selWrap && sel) {
+            if (cardMeanings.length > 1) {
+              selWrap.style.display = 'block';
+              sel.innerHTML = cardMeanings.map((m, i) => {
+                const label = m.translation_zh
+                  ? `[${m.partOfSpeech}] ${m.translation_zh}`
+                  : `[${m.partOfSpeech}] ${m.definition_en.slice(0, 30)}`;
+                return `<option value="${i}">${label}</option>`;
+              }).join('');
+              sel.value = '0';
+            } else {
+              selWrap.style.display = 'none';
+              sel.innerHTML = '';
+            }
+          }
 
           status.textContent = '';
           btnLookup.disabled = false;
         } catch (_) {
           toast('無法自動取得釋義，請手動填寫');
           $('#add-fields').style.display = 'block';
-          $('#add-meanings').style.display = 'none';
+          $('#meaning-selector-wrap').style.display = 'none';
           pendingLookups = [];
           status.textContent = '';
           btnLookup.disabled = false;
@@ -1119,6 +1148,29 @@ function bindEvents() {
       };
     }
 
+    // ─── 釋義切換下拉選單 ───
+    const meaningSelect = document.getElementById('meaning-select');
+    if (meaningSelect) {
+      meaningSelect.addEventListener('change', () => {
+        const lookup = pendingLookups[0];
+        if (!lookup) return;
+        const idx = parseInt(meaningSelect.value);
+        if (isNaN(idx) || !lookup.meanings[idx]) return;
+        lookup.selected_meaning_index = idx;
+        const m = lookup.meanings[idx];
+        const phonInp = document.getElementById('inp-phonetic');
+        const zhInp = document.getElementById('inp-zh');
+        const defInp = document.getElementById('inp-def');
+        const exInp = document.getElementById('inp-ex');
+        const exZhEl = document.getElementById('inp-ex-zh');
+        if (phonInp) phonInp.value = lookup.phonetic || '';
+        if (zhInp) zhInp.value = m.translation_zh || '';
+        if (defInp) defInp.value = m.definition_en || '';
+        if (exInp) exInp.value = m.example_en || '';
+        if (exZhEl) exZhEl.textContent = m.example_zh || '';
+      });
+    }
+
     if (btnAdd) {
       btnAdd.onclick = async () => {
         const lookup = pendingLookups[0];
@@ -1147,7 +1199,7 @@ function bindEvents() {
           phonetic: lookup.phonetic,
           meanings,
           verb_forms: lookup.verb_forms || null,
-          selected_meaning_index: 0,
+          selected_meaning_index: lookup.selected_meaning_index || 0,
           repetition: 0,
           interval: 0,
           ease_factor: 2.5,
@@ -1172,20 +1224,49 @@ function bindEvents() {
           toast('此單字已存在，請勿重複新增');
           return;
         }
-        const phonetic = (document.getElementById('inp-phonetic')?.value || '').trim();
-        const translation_zh = (document.getElementById('inp-zh')?.value || '').trim();
-        const definition_en = (document.getElementById('inp-def')?.value || '').trim();
-        const example_en = (document.getElementById('inp-ex')?.value || '').trim();
-        const example_zh = (document.getElementById('inp-ex-zh')?.textContent || '').trim();
-        if (!w || !definition_en) { toast('Word and definition are required'); return; }
+
+        // 若有 lookup 資料，使用完整的 meanings 陣列
+        const lookup = pendingLookups[0];
+        let meanings, phonetic, selectedIdx;
+        if (lookup && lookup.meanings && lookup.meanings.length > 0) {
+          // 以表單欄位覆蓋當前選中的那一筆（允許使用者微調）
+          const selIdx = lookup.selected_meaning_index || 0;
+          const updatedMeanings = lookup.meanings.map((m, i) => {
+            if (i === selIdx) {
+              return {
+                partOfSpeech: m.partOfSpeech,
+                definition_en: (document.getElementById('inp-def')?.value || '').trim() || m.definition_en,
+                translation_zh: (document.getElementById('inp-zh')?.value || '').trim() || m.translation_zh,
+                example_en: (document.getElementById('inp-ex')?.value || '').trim() || m.example_en,
+                example_zh: (document.getElementById('inp-ex-zh')?.textContent || '').trim() || m.example_zh,
+              };
+            }
+            return m;
+          });
+          meanings = updatedMeanings;
+          phonetic = (document.getElementById('inp-phonetic')?.value || '').trim() || lookup.phonetic;
+          selectedIdx = selIdx;
+        } else {
+          // 無 lookup 資料（手動輸入模式）
+          const phoneticVal = (document.getElementById('inp-phonetic')?.value || '').trim();
+          const translation_zh = (document.getElementById('inp-zh')?.value || '').trim();
+          const definition_en = (document.getElementById('inp-def')?.value || '').trim();
+          const example_en = (document.getElementById('inp-ex')?.value || '').trim();
+          const example_zh = (document.getElementById('inp-ex-zh')?.textContent || '').trim();
+          if (!w || !definition_en) { toast('Word and definition are required'); return; }
+          meanings = [{ partOfSpeech: '', definition_en, translation_zh, example_en, example_zh }];
+          phonetic = phoneticVal;
+          selectedIdx = 0;
+        }
+
         const now = new Date();
         const card = {
           id: uuid(),
           word: w,
           phonetic,
-          meanings: [{ partOfSpeech: '', definition_en, translation_zh, example_en, example_zh }],
-          verb_forms: null,
-          selected_meaning_index: 0,
+          meanings,
+          verb_forms: lookup?.verb_forms || null,
+          selected_meaning_index: selectedIdx,
           repetition: 0,
           interval: 0,
           ease_factor: 2.5,
