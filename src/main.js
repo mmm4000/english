@@ -64,7 +64,10 @@ async function translateToZh(text) {
   if (!text) return '';
   try {
     const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=zh-TW&dt=t&q=${encodeURIComponent(text)}`;
-    const res = await fetch(url);
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 5000);
+    const res = await fetch(url, { signal: controller.signal });
+    clearTimeout(timer);
     if (!res.ok) throw new Error(`Google ${res.status}`);
     const data = await res.json();
     const result = data[0]?.map(item => item[0]).join('') || '';
@@ -74,7 +77,10 @@ async function translateToZh(text) {
   }
   try {
     const trUrl = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=en|zh-TW`;
-    const res = await fetch(trUrl);
+    const controller2 = new AbortController();
+    const timer2 = setTimeout(() => controller2.abort(), 5000);
+    const res = await fetch(trUrl, { signal: controller2.signal });
+    clearTimeout(timer2);
     if (!res.ok) return '';
     const data = await res.json();
     const result = data.responseData?.translatedText || '';
@@ -104,13 +110,27 @@ async function translateMeaningsInBackground(meanings, word) {
     texts.push(m.example_en || '');
   }
 
-  const results = await batchTranslate(texts);
+  let results = await batchTranslate(texts);
 
   let idx = 0;
   const wordZh = results[idx++] || '';
   for (const m of meanings.slice(0, 4)) {
-    m.translation_zh = results[idx++] || '';
-    m.example_zh = results[idx++] || '';
+    const defZh = results[idx++] || '';
+    const exZh = results[idx++] || '';
+    if (defZh) m.translation_zh = defZh;
+    if (exZh) m.example_zh = exZh;
+    if (!m.translation_zh && wordZh) m.translation_zh = wordZh;
+  }
+
+  /* Retry once for meanings still missing translations */
+  const needsRetry = meanings.slice(0, 4).filter(m => !m.translation_zh);
+  if (needsRetry.length > 0) {
+    const retryTexts = needsRetry.map(m => m.definition_en || '');
+    const retryResults = await batchTranslate(retryTexts);
+    for (let i = 0; i < needsRetry.length; i++) {
+      if (retryResults[i]) needsRetry[i].translation_zh = retryResults[i];
+      else if (wordZh) needsRetry[i].translation_zh = wordZh;
+    }
   }
 
   if (currentView === 'add') {
@@ -175,10 +195,12 @@ function posPriority(pos) {
 
 async function lookupWord(word) {
   const queryWord = word.trim().toLowerCase();
+  const dictPromise = fetch(`https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(queryWord)}`)
+    .then(r => r.ok ? r.json() : null)
+    .catch(() => null);
+  const timeoutPromise = new Promise(resolve => setTimeout(() => resolve(null), 8000));
   const [dictData, wordZh] = await Promise.all([
-    fetch(`https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(queryWord)}`)
-      .then(r => r.ok ? r.json() : null)
-      .catch(() => null),
+    Promise.race([dictPromise, timeoutPromise]),
     translateToZh(queryWord),
   ]);
   if (!dictData || dictData.length === 0) {
