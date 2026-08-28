@@ -4,7 +4,7 @@ import { getVerbForms, isLikelyVerb } from './utils/conjugations.js';
 import { fetchTatoebaExamples } from './utils/tatoeba.js';
 import { getLocalExample, generateAutoExample } from './utils/examples.js';
 import { generateListeningQuestions, getListeningBankSize } from './utils/listeningGenerator.js';
-import { lookupWord } from './api/dictionary.js';
+import { lookupWord, getSmartSentence, translateSentence } from './api/dictionary.js';
 
 const $ = (sel) => document.querySelector(sel);
 const app = () => $('#app');
@@ -122,8 +122,8 @@ async function translateMeaningsInBackground(meanings, word) {
   for (const m of meanings.slice(0, 4)) {
     const defZh = results[idx++] || '';
     const exZh = results[idx++] || '';
-    if (defZh) m.translation_zh = defZh;
-    if (exZh) m.example_zh = exZh;
+    if (!m.translation_zh && defZh) m.translation_zh = defZh;
+    if (!m.example_zh && exZh) m.example_zh = exZh;
     if (!m.translation_zh && wordZh) m.translation_zh = wordZh;
     console.log(`[AddWord Debug] translateMeaningsInBackground: ${m.partOfSpeech} =>`, {
       translation_zh: m.translation_zh,
@@ -137,8 +137,8 @@ async function translateMeaningsInBackground(meanings, word) {
     const retryTexts = needsRetry.map(m => m.definition_en || '');
     const retryResults = await batchTranslate(retryTexts);
     for (let i = 0; i < needsRetry.length; i++) {
-      if (retryResults[i]) needsRetry[i].translation_zh = retryResults[i];
-      else if (wordZh) needsRetry[i].translation_zh = wordZh;
+      if (!needsRetry[i].translation_zh && retryResults[i]) needsRetry[i].translation_zh = retryResults[i];
+      else if (!needsRetry[i].translation_zh && wordZh) needsRetry[i].translation_zh = wordZh;
     }
   }
 
@@ -376,9 +376,11 @@ function renderAdd() {
 
 function renderMeaningOptionLabel(m) {
   let pos = m.partOfSpeech || '—';
-  const zh = m.translation_zh || '';
-  // 防止重複前綴：移除 pos 兩端的 [ ] 再重新包裝
+  let zh = m.translation_zh || '';
+  // 防止重複前綴：移除 pos 兩端的 [ ] 或 ( )
   pos = pos.replace(/^[\[\(]+/, '').replace(/[\]\)]+$/, '');
+  // 移除 translation 開頭的 [詞性] 前綴（避免重複）
+  zh = zh.replace(/^[\[\(][^\]\)]+[\]\)]\s*/, '');
   if (!zh) return `[${pos}] 載入中…`;
   return `[${pos}] ${zh}`;
 }
@@ -963,8 +965,8 @@ function bindEvents() {
             partOfSpeech: m.partOfSpeech,
             definition_en: m.definition,
             translation_zh: m.translation,
-            example_en: m.example,
-            example_zh: '',
+            example_en: m.example || '',
+            example_zh: m.example_zh || '',
           }));
           console.log(`[AddWord Debug] 轉換後 cardMeanings:`, cardMeanings);
 
@@ -1067,31 +1069,19 @@ function bindEvents() {
       btnRefreshExInput.onclick = async () => {
         const word = inpWord ? inpWord.value.trim() : '';
         if (!word) { toast('請先輸入單字'); return; }
-        const cache = getTatoebaCache(word, 0);
-        if (cache.examples.length === 0) {
-          let results = [];
-          /* Try local first */
-          const local = getLocalExample(word);
-          if (local) results.push({ example_en: local.en, example_zh: local.zh });
-          /* Then Tatoeba */
-          try {
-            const tResults = await fetchTatoebaExamples(word);
-            results = results.concat(tResults);
-          } catch (_) {}
-          /* Then auto-gen */
-          if (results.length === 0) {
-            const auto = generateAutoExample(word, '');
-            results.push({ example_en: auto.en, example_zh: auto.zh });
-          }
-          cache.examples = results;
-          cache.currentIdx = -1;
-        }
-        cache.currentIdx = (cache.currentIdx + 1) % cache.examples.length;
-        const ex = cache.examples[cache.currentIdx];
+        const lookup = pendingLookups[0];
+        const selIdx = lookup?.selected_meaning_index || 0;
+        const pos = lookup?.meanings?.[selIdx]?.partOfSpeech || '';
+        const enSentence = getSmartSentence(word, pos, lookup?.verb_forms || null);
+        const zhSentence = await translateSentence(enSentence);
         const exInp = document.getElementById('inp-ex');
         const zhEl = document.getElementById('inp-ex-zh');
-        if (exInp) exInp.value = ex.example_en;
-        if (zhEl) zhEl.textContent = ex.example_zh || '';
+        if (exInp) exInp.value = enSentence;
+        if (zhEl) zhEl.textContent = zhSentence || '';
+        if (lookup?.meanings?.[selIdx]) {
+          lookup.meanings[selIdx].example_en = enSentence;
+          lookup.meanings[selIdx].example_zh = zhSentence;
+        }
       };
     }
 
@@ -1103,16 +1093,20 @@ function bindEvents() {
         if (!lookup) return;
         const idx = parseInt(meaningSelect.value);
         if (isNaN(idx) || !lookup.meanings[idx]) return;
-        console.log(`[AddWord Debug] 釋義切換: index=${idx}, meanings[${
-          idx
-        }]=`, lookup.meanings[idx]);
+        console.log(`[AddWord Debug] 釋義切換: index=${idx}`);
         lookup.selected_meaning_index = idx;
         const m = lookup.meanings[idx];
-        if (!m.translation_zh || !m.example_zh) {
-          console.log(`[AddWord Debug] 該釋義缺少翻譯，觸發 translateMeaningOnDemand`);
+
+        // 補翻譯
+        if (!m.translation_zh) {
           await translateMeaningOnDemand(m, lookup.word);
-          console.log(`[AddWord Debug] translateMeaningOnDemand 完成:`, m);
         }
+
+        // 重新生成對應詞性的語境例句
+        const enSentence = getSmartSentence(lookup.word, m.partOfSpeech, lookup.verb_forms);
+        m.example_en = enSentence;
+        m.example_zh = await translateSentence(enSentence);
+
         const phonInp = document.getElementById('inp-phonetic');
         const zhInp = document.getElementById('inp-zh');
         const defInp = document.getElementById('inp-def');
@@ -1124,9 +1118,6 @@ function bindEvents() {
         if (exInp) exInp.value = m.example_en || '';
         if (exZhEl) exZhEl.textContent = m.example_zh || '';
         console.log(`[AddWord Debug] 切換後欄位回填:`, {
-          phonetic: lookup.phonetic,
-          translation_zh: m.translation_zh,
-          definition_en: m.definition_en,
           example_en: m.example_en,
           example_zh: m.example_zh,
         });
