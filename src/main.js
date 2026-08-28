@@ -52,12 +52,38 @@ function escAttr(s) {
   return String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;');
 }
 
+/* ─── Meaning 標準化（相容新舊格式） ─── */
+
+function normalizeMeaning(m) {
+  if (!m) return { pos: '', label: '', translation: '', definition: '', exampleEn: '', exampleZh: '' };
+  // 新格式已有 pos 欄位
+  if (m.pos !== undefined) {
+    return {
+      pos: m.pos || '',
+      label: m.label || `[${m.pos || ''}] ${m.translation || ''}`,
+      translation: m.translation || '',
+      definition: m.definition || '',
+      exampleEn: m.exampleEn || '',
+      exampleZh: m.exampleZh || '',
+    };
+  }
+  // 舊格式相容
+  return {
+    pos: m.partOfSpeech || '',
+    label: `[${m.partOfSpeech || ''}] ${m.translation_zh || ''}`,
+    translation: m.translation_zh || '',
+    definition: m.definition_en || '',
+    exampleEn: m.example_en || '',
+    exampleZh: m.example_zh || '',
+  };
+}
+
 function getActiveMeaning(card) {
   if (card && card.meanings && card.meanings.length > 0) {
     const idx = Math.min(card.selected_meaning_index || 0, card.meanings.length - 1);
-    return card.meanings[idx];
+    return normalizeMeaning(card.meanings[idx]);
   }
-  return { partOfSpeech: '', definition_en: card?.definition_en || '', translation_zh: card?.translation_zh || '', example_en: card?.example_en || '', example_zh: '' };
+  return { pos: '', label: '', translation: card?.translation_zh || '', definition: card?.definition_en || '', exampleEn: card?.example_en || '', exampleZh: '' };
 }
 
 /* ─── Translation with fallback ─── */
@@ -97,19 +123,19 @@ async function batchTranslate(texts) {
 
 /* ─── Background translation ─── */
 async function translateMeaningOnDemand(m, word) {
-  if (m.translation_zh && m.example_zh) return;
-  const texts = [m.definition_en || '', m.example_en || ''];
+  if (m.translation && m.exampleZh) return;
+  const texts = [m.definition || '', m.exampleEn || ''];
   const results = await batchTranslate(texts);
-  if (!m.translation_zh) m.translation_zh = results[0] || '';
-  if (!m.example_zh) m.example_zh = results[1] || '';
+  if (!m.translation) m.translation = results[0] || '';
+  if (!m.exampleZh) m.exampleZh = results[1] || '';
 }
 
 async function translateMeaningsInBackground(meanings, word) {
   console.log(`[AddWord Debug] translateMeaningsInBackground: 開始，word="${word}", meanings=${meanings.length} 筆`);
   const texts = [word];
   for (const m of meanings.slice(0, 4)) {
-    texts.push(m.definition_en || '');
-    texts.push(m.example_en || '');
+    texts.push(m.definition || '');
+    texts.push(m.exampleEn || '');
   }
   console.log(`[AddWord Debug] translateMeaningsInBackground: 準備翻譯 ${texts.length} 段文字`, texts);
 
@@ -122,23 +148,23 @@ async function translateMeaningsInBackground(meanings, word) {
   for (const m of meanings.slice(0, 4)) {
     const defZh = results[idx++] || '';
     const exZh = results[idx++] || '';
-    if (!m.translation_zh && defZh) m.translation_zh = defZh;
-    if (!m.example_zh && exZh) m.example_zh = exZh;
-    if (!m.translation_zh && wordZh) m.translation_zh = wordZh;
-    console.log(`[AddWord Debug] translateMeaningsInBackground: ${m.partOfSpeech} =>`, {
-      translation_zh: m.translation_zh,
-      example_zh: m.example_zh,
+    if (!m.translation && defZh) m.translation = defZh;
+    if (!m.exampleZh && exZh) m.exampleZh = exZh;
+    if (!m.translation && wordZh) m.translation = wordZh;
+    console.log(`[AddWord Debug] translateMeaningsInBackground: ${m.pos} =>`, {
+      translation: m.translation,
+      exampleZh: m.exampleZh,
     });
   }
 
-  const needsRetry = meanings.slice(0, 4).filter(m => !m.translation_zh);
+  const needsRetry = meanings.slice(0, 4).filter(m => !m.translation);
   if (needsRetry.length > 0) {
     console.log(`[AddWord Debug] translateMeaningsInBackground: 有 ${needsRetry.length} 筆缺少翻譯，重試`);
-    const retryTexts = needsRetry.map(m => m.definition_en || '');
+    const retryTexts = needsRetry.map(m => m.definition || '');
     const retryResults = await batchTranslate(retryTexts);
     for (let i = 0; i < needsRetry.length; i++) {
-      if (!needsRetry[i].translation_zh && retryResults[i]) needsRetry[i].translation_zh = retryResults[i];
-      else if (!needsRetry[i].translation_zh && wordZh) needsRetry[i].translation_zh = wordZh;
+      if (!needsRetry[i].translation && retryResults[i]) needsRetry[i].translation = retryResults[i];
+      else if (!needsRetry[i].translation && wordZh) needsRetry[i].translation = wordZh;
     }
   }
 
@@ -146,15 +172,15 @@ async function translateMeaningsInBackground(meanings, word) {
     const sel = document.getElementById('meaning-select');
     if (sel && meanings.length >= 1) {
       sel.innerHTML = meanings.map((m, i) => {
-        return `<option value="${i}">${renderMeaningOptionLabel(m)}</option>`;
+        return `<option value="${i}">${m.label || `[${m.pos}] ${m.translation}`}</option>`;
       }).join('');
       console.log(`[AddWord Debug] translateMeaningsInBackground: 下拉選單已更新 (含翻譯)`);
     }
     const inpZh = $('#inp-zh');
     const selIdx = pendingLookups[0]?.selected_meaning_index || 0;
     if (inpZh && meanings[selIdx] && !inpZh.value) {
-      inpZh.value = meanings[selIdx].translation_zh || '';
-      console.log(`[AddWord Debug] translateMeaningsInBackground: inp-zh 已填入`, meanings[selIdx].translation_zh);
+      inpZh.value = meanings[selIdx].translation || '';
+      console.log(`[AddWord Debug] translateMeaningsInBackground: inp-zh 已填入`, meanings[selIdx].translation);
     }
     if (pendingLookups[0]) {
       pendingLookups[0].wordZh = wordZh;
@@ -183,8 +209,9 @@ function nav() {
 }
 
 function meaningLabel(m) {
-  const pos = m.partOfSpeech || '—';
-  const zh = m.translation_zh || '';
+  const nm = normalizeMeaning(m);
+  const pos = nm.pos || '—';
+  const zh = nm.translation || '';
   if (!zh) return `[${pos}] 載入中…`;
   const short = zh.length > 10 ? zh.slice(0, 10) + '…' : zh;
   return `[${pos}] ${short}`;
@@ -244,7 +271,7 @@ function renderHome() {
             <div>
               <strong style="color:#f8fafc;">${c.word}</strong>
               <span style="color:#94a3b8;margin-left:.5rem;font-size:.85rem;">${c.phonetic}</span>
-              ${m.translation_zh ? `<span style="color:#3b82f6;margin-left:.5rem;font-size:.85rem;">${m.translation_zh}</span>` : ''}
+              ${m.translation ? `<span style="color:#3b82f6;margin-left:.5rem;font-size:.85rem;">${m.translation}</span>` : ''}
             </div>
             <div style="display:flex;gap:.5rem;">
               <button data-speak="${c.word}" style="background:none;border:none;color:#3b82f6;font-size:1.2rem;cursor:pointer;padding:.3rem;min-height:44px;min-width:44px;">🔊</button>
@@ -260,14 +287,17 @@ function renderHome() {
 function renderDetail() {
   if (!detailCard) return renderHome();
   const c = detailCard;
-  const meanings = c.meanings && c.meanings.length > 0 ? c.meanings : [{ partOfSpeech: '', definition_en: c.definition_en || '', translation_zh: c.translation_zh || '', example_en: c.example_en || '', example_zh: '' }];
+  const rawMeanings = c.meanings && c.meanings.length > 0 ? c.meanings : [{ partOfSpeech: '', definition_en: c.definition_en || '', translation_zh: c.translation_zh || '', example_en: c.example_en || '', example_zh: '' }];
+  const meanings = rawMeanings.map(normalizeMeaning);
   const selIdx = Math.min(c.selected_meaning_index || 0, meanings.length - 1);
   const m = meanings[selIdx];
 
   const dropdownOpts = meanings.map((mi, i) => {
     const sel = i === selIdx ? ' selected' : '';
-    return `<option value="${i}"${sel}>${meaningLabel(mi)}</option>`;
+    return `<option value="${i}"${sel}>${mi.label || `[${mi.pos}] ${mi.translation}`}</option>`;
   }).join('');
+
+  const isVerb = m.pos && (m.pos.includes('動') || m.pos.toLowerCase().includes('verb'));
 
   return `
     <div style="flex:1;padding:1rem;">
@@ -281,7 +311,7 @@ function renderDetail() {
           <button data-speak="${c.word}" style="background:none;border:none;color:#3b82f6;font-size:2rem;cursor:pointer;padding:.3rem;min-height:44px;min-width:44px;">🔊</button>
         </div>
 
-        ${renderVerbFormsChips(c.verb_forms)}
+        ${isVerb ? renderVerbFormsChips(c.verb_forms) : ''}
 
         ${meanings.length > 1 ? `
           <div style="margin-bottom:1rem;">
@@ -294,31 +324,31 @@ function renderDetail() {
 
         <div style="margin-bottom:1rem;">
           <div style="color:#94a3b8;font-size:.8rem;margin-bottom:.25rem;">繁體中文釋義</div>
-          ${m.translation_zh
-            ? `<div style="color:#3b82f6;font-size:1.3rem;">${m.translation_zh}</div>`
+          ${m.translation
+            ? `<div style="color:#3b82f6;font-size:1.3rem;">${m.translation}</div>`
             : `<div style="color:#64748b;font-size:1rem;font-style:italic;">（正在取得翻譯...）</div>`
           }
         </div>
 
         <div style="margin-bottom:1rem;">
           <div style="color:#94a3b8;font-size:.8rem;margin-bottom:.25rem;">English Definition</div>
-          <div style="color:#cbd5e1;font-size:1rem;line-height:1.5;">${m.definition_en}</div>
+          <div style="color:#cbd5e1;font-size:1rem;line-height:1.5;">${m.definition}</div>
         </div>
 
         <div style="margin-bottom:1rem;">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.5rem;">
             <div style="color:#94a3b8;font-size:.8rem;">English Example</div>
             <div style="display:flex;gap:.5rem;">
-              ${m.example_en ? `<button data-speak-ex="${escAttr(m.example_en)}" style="background:none;border:none;color:#3b82f6;font-size:1rem;cursor:pointer;padding:.3rem;min-height:44px;min-width:44px;">🔊</button>` : ''}
-              <button data-refresh-ex="${escAttr(c.word)}" style="background:none;border:none;color:#f59e0b;font-size:1rem;cursor:pointer;padding:.3rem;min-height:44px;min-width:44px;" title="${m.example_en ? '換一句例句' : '嘗試取得例句'}">🔄</button>
+              ${m.exampleEn ? `<button data-speak-ex="${escAttr(m.exampleEn)}" style="background:none;border:none;color:#3b82f6;font-size:1rem;cursor:pointer;padding:.3rem;min-height:44px;min-width:44px;">🔊</button>` : ''}
+              <button data-refresh-ex="${escAttr(c.word)}" style="background:none;border:none;color:#f59e0b;font-size:1rem;cursor:pointer;padding:.3rem;min-height:44px;min-width:44px;" title="${m.exampleEn ? '換一句例句' : '嘗試取得例句'}">🔄</button>
             </div>
           </div>
-          <div id="display-example-en" style="color:${m.example_en ? '#e2e8f0' : '#64748b'};font-style:${m.example_en ? 'italic' : 'normal'};font-size:${m.example_en ? '1rem' : '.85rem'};line-height:1.5;">${m.example_en || '此釋義暫無專屬例句'}</div>
+          <div id="display-example-en" style="color:${m.exampleEn ? '#e2e8f0' : '#64748b'};font-style:${m.exampleEn ? 'italic' : 'normal'};font-size:${m.exampleEn ? '1rem' : '.85rem'};line-height:1.5;">${m.exampleEn || '此釋義暫無專屬例句'}</div>
         </div>
 
         <div style="margin-bottom:1rem;">
           <div style="color:#94a3b8;font-size:.8rem;margin-bottom:.25rem;">中文例句翻譯</div>
-          <div id="display-example-zh" style="color:${m.example_zh ? '#cbd5e1' : '#64748b'};font-size:${m.example_zh ? '.95rem' : '.85rem'};font-style:italic;line-height:1.5;">${m.example_zh || '（正在取得例句翻譯...）'}</div>
+          <div id="display-example-zh" style="color:${m.exampleZh ? '#cbd5e1' : '#64748b'};font-size:${m.exampleZh ? '.95rem' : '.85rem'};font-style:italic;line-height:1.5;">${m.exampleZh || '（正在取得例句翻譯...）'}</div>
         </div>
 
         <div style="border-top:1px solid #334155;padding-top:1rem;margin-top:.5rem;">
@@ -375,14 +405,9 @@ function renderAdd() {
 }
 
 function renderMeaningOptionLabel(m) {
-  let pos = m.partOfSpeech || '—';
-  let zh = m.translation_zh || '';
-  // 防止重複前綴：移除 pos 兩端的 [ ] 或 ( )
-  pos = pos.replace(/^[\[\(]+/, '').replace(/[\]\)]+$/, '');
-  // 移除 translation 開頭的 [詞性] 前綴（避免重複）
-  zh = zh.replace(/^[\[\(][^\]\)]+[\]\)]\s*/, '');
-  if (!zh) return `[${pos}] 載入中…`;
-  return `[${pos}] ${zh}`;
+  const nm = normalizeMeaning(m);
+  if (nm.label) return nm.label;
+  return `[${nm.pos || '—'}] ${nm.translation || '載入中…'}`;
 }
 
 function renderQuiz() {
@@ -477,9 +502,9 @@ function renderFlashcard() {
     <div id="flashcard" style="background:#1e293b;border-radius:1rem;padding:2rem;min-height:200px;display:flex;flex-direction:column;align-items:center;justify-content:center;cursor:pointer;transition:transform .3s;">
       <div style="font-size:2rem;color:#f8fafc;" id="fc-front">${c.word}</div>
       <div id="fc-back" style="display:none;text-align:center;margin-top:1rem;">
-        ${m.translation_zh ? `<div style="color:#3b82f6;font-size:1.2rem;margin-bottom:.5rem;">${m.translation_zh}</div>` : ''}
-        <div style="color:#cbd5e1;margin-bottom:.5rem;">${m.definition_en}</div>
-        ${m.example_en ? `<div style="color:#94a3b8;font-style:italic;font-size:.9rem;">${m.example_en}</div>` : ''}
+        ${m.translation ? `<div style="color:#3b82f6;font-size:1.2rem;margin-bottom:.5rem;">${m.translation}</div>` : ''}
+        <div style="color:#cbd5e1;margin-bottom:.5rem;">${m.definition}</div>
+        ${m.exampleEn ? `<div style="color:#94a3b8;font-style:italic;font-size:.9rem;">${m.exampleEn}</div>` : ''}
       </div>
     </div>
     <div id="fc-buttons" style="display:none;margin-top:1rem;display:flex;gap:.5rem;justify-content:center;flex-wrap:wrap;">
@@ -517,7 +542,7 @@ function renderFillBlank() {
   while (otherWords.length < 3) otherWords.push('—');
   const shuffled = otherWords.sort(() => Math.random() - 0.5).slice(0, 3);
   const options = [...shuffled, c.word].sort(() => Math.random() - 0.5);
-  const blanked = (m.example_en || '').replace(new RegExp(`\\b${c.word}\\b`, 'gi'), '______') || `The meaning of "______" is...`;
+  const blanked = (m.exampleEn || '').replace(new RegExp(`\\b${c.word}\\b`, 'gi'), '______') || `The meaning of "______" is...`;
   const area = $('#quiz-area');
   area.innerHTML = `
     <div style="background:#1e293b;border-radius:1rem;padding:1.5rem;margin-bottom:1rem;">
@@ -825,7 +850,8 @@ function bindEvents() {
           } catch (_) {}
           /* Then auto-gen */
           if (results.length === 0) {
-            const auto = generateAutoExample(word, detailCard.meanings?.[mIdx]?.partOfSpeech || '');
+            const nm = normalizeMeaning(detailCard.meanings?.[mIdx]);
+            const auto = generateAutoExample(word, nm.pos || '');
             results.push({ example_en: auto.en, example_zh: auto.zh });
           }
           cache.examples = results;
@@ -834,8 +860,8 @@ function bindEvents() {
         cache.currentIdx = (cache.currentIdx + 1) % cache.examples.length;
         const ex = cache.examples[cache.currentIdx];
         if (detailCard.meanings && detailCard.meanings[mIdx]) {
-          detailCard.meanings[mIdx].example_en = ex.example_en;
-          detailCard.meanings[mIdx].example_zh = ex.example_zh;
+          detailCard.meanings[mIdx].exampleEn = ex.example_en;
+          detailCard.meanings[mIdx].exampleZh = ex.example_zh;
           await saveCard(detailCard);
           allCards = allCards.map(x => x.id === detailCard.id ? detailCard : x);
           detailCard = allCards.find(x => x.id === detailCard.id) || detailCard;
@@ -858,8 +884,8 @@ function bindEvents() {
         const idx = parseInt(meaningSelect.value);
         if (detailCard && !isNaN(idx)) {
           detailCard.selected_meaning_index = idx;
-          const m = detailCard.meanings?.[idx];
-          if (m && (!m.translation_zh || !m.example_zh)) {
+          const m = normalizeMeaning(detailCard.meanings?.[idx]);
+          if (m && (!m.translation || !m.exampleZh)) {
             await translateMeaningOnDemand(m, detailCard.word);
           }
           await saveCard(detailCard);
@@ -869,11 +895,11 @@ function bindEvents() {
           const exampleEnEl = document.getElementById('display-example-en');
           const exampleZhEl = document.getElementById('display-example-zh');
           if (exampleEnEl && exampleZhEl) {
-            if (m && m.example_en) {
-              exampleEnEl.textContent = m.example_en;
+            if (m && m.exampleEn) {
+              exampleEnEl.textContent = m.exampleEn;
               exampleEnEl.style.fontStyle = 'italic';
               exampleEnEl.style.color = '#e2e8f0';
-              exampleZhEl.textContent = m.example_zh || '';
+              exampleZhEl.textContent = m.exampleZh || '';
               exampleZhEl.style.color = '#cbd5e1';
             } else {
               exampleEnEl.textContent = '此釋義暫無專屬例句';
@@ -961,13 +987,7 @@ function bindEvents() {
             return;
           }
 
-          const cardMeanings = data.meanings.map(m => ({
-            partOfSpeech: m.partOfSpeech,
-            definition_en: m.definition,
-            translation_zh: m.translation,
-            example_en: m.example || '',
-            example_zh: m.example_zh || '',
-          }));
+          const cardMeanings = data.meanings.map(m => normalizeMeaning(m));
           console.log(`[AddWord Debug] 轉換後 cardMeanings:`, cardMeanings);
 
           pendingLookups = [{
@@ -986,8 +1006,8 @@ function bindEvents() {
           // 渲染動詞變化（僅當選中動詞詞性時顯示）
           const verbFormsEl = document.getElementById('add-verb-forms');
           if (verbFormsEl) {
-            const isFirstVerb = first.partOfSpeech &&
-              (first.partOfSpeech.includes('動') || first.partOfSpeech.toLowerCase().includes('verb'));
+            const isFirstVerb = first.pos &&
+              (first.pos.includes('動') || first.pos.toLowerCase().includes('verb'));
             if (data.verb_forms && isFirstVerb) {
               verbFormsEl.innerHTML = renderVerbFormsChips(data.verb_forms);
               verbFormsEl.querySelectorAll('[data-speak]').forEach(btn => {
@@ -1007,15 +1027,15 @@ function bindEvents() {
             const exInp = document.getElementById('inp-ex');
             const exZhEl = document.getElementById('inp-ex-zh');
             if (phonInp) phonInp.value = data.phonetic || '';
-            if (zhInp) zhInp.value = first.translation_zh || '';
-            if (defInp) defInp.value = first.definition_en || '';
-            if (exInp) exInp.value = first.example_en || '';
+            if (zhInp) zhInp.value = first.translation || '';
+            if (defInp) defInp.value = first.definition || '';
+            if (exInp) exInp.value = first.exampleEn || '';
             if (exZhEl) exZhEl.textContent = '';
             console.log(`[AddWord Debug] 欄位回填完成:`, {
               phonetic: data.phonetic,
-              translation_zh: first.translation_zh,
-              definition_en: first.definition_en,
-              example_en: first.example_en,
+              translation: first.translation,
+              definition: first.definition,
+              exampleEn: first.exampleEn,
             });
           });
 
@@ -1075,7 +1095,8 @@ function bindEvents() {
         if (!word) { toast('請先輸入單字'); return; }
         const lookup = pendingLookups[0];
         const selIdx = lookup?.selected_meaning_index || 0;
-        const pos = lookup?.meanings?.[selIdx]?.partOfSpeech || '';
+        const nm = normalizeMeaning(lookup?.meanings?.[selIdx]);
+        const pos = nm.pos || '';
         const enSentence = getSmartSentence(word, pos, lookup?.verb_forms || null);
         const zhSentence = await translateSentence(enSentence);
         const exInp = document.getElementById('inp-ex');
@@ -1083,8 +1104,8 @@ function bindEvents() {
         if (exInp) exInp.value = enSentence;
         if (zhEl) zhEl.textContent = zhSentence || '';
         if (lookup?.meanings?.[selIdx]) {
-          lookup.meanings[selIdx].example_en = enSentence;
-          lookup.meanings[selIdx].example_zh = zhSentence;
+          lookup.meanings[selIdx].exampleEn = enSentence;
+          lookup.meanings[selIdx].exampleZh = zhSentence;
         }
       };
     }
@@ -1099,17 +1120,20 @@ function bindEvents() {
         if (isNaN(idx) || !lookup.meanings[idx]) return;
         console.log(`[AddWord Debug] 釋義切換: index=${idx}`);
         lookup.selected_meaning_index = idx;
-        const m = lookup.meanings[idx];
+        const m = normalizeMeaning(lookup.meanings[idx]);
 
         // 補翻譯
-        if (!m.translation_zh) {
+        if (!m.translation) {
           await translateMeaningOnDemand(m, lookup.word);
         }
 
         // 重新生成對應詞性的語境例句
-        const enSentence = getSmartSentence(lookup.word, m.partOfSpeech, lookup.verb_forms);
-        m.example_en = enSentence;
-        m.example_zh = await translateSentence(enSentence);
+        const enSentence = getSmartSentence(lookup.word, m.pos, lookup.verb_forms);
+        m.exampleEn = enSentence;
+        m.exampleZh = await translateSentence(enSentence);
+        // 回寫到原始物件
+        lookup.meanings[idx].exampleEn = m.exampleEn;
+        lookup.meanings[idx].exampleZh = m.exampleZh;
 
         const phonInp = document.getElementById('inp-phonetic');
         const zhInp = document.getElementById('inp-zh');
@@ -1117,16 +1141,16 @@ function bindEvents() {
         const exInp = document.getElementById('inp-ex');
         const exZhEl = document.getElementById('inp-ex-zh');
         if (phonInp) phonInp.value = lookup.phonetic || '';
-        if (zhInp) zhInp.value = m.translation_zh || '';
-        if (defInp) defInp.value = m.definition_en || '';
-        if (exInp) exInp.value = m.example_en || '';
-        if (exZhEl) exZhEl.textContent = m.example_zh || '';
+        if (zhInp) zhInp.value = m.translation || '';
+        if (defInp) defInp.value = m.definition || '';
+        if (exInp) exInp.value = m.exampleEn || '';
+        if (exZhEl) exZhEl.textContent = m.exampleZh || '';
 
         // 動詞變化區塊：僅當選中動詞時顯示
         const verbFormsEl = document.getElementById('add-verb-forms');
         if (verbFormsEl) {
-          const isVerb = m.partOfSpeech &&
-            (m.partOfSpeech.includes('動') || m.partOfSpeech.toLowerCase().includes('verb'));
+          const isVerb = m.pos &&
+            (m.pos.includes('動') || m.pos.toLowerCase().includes('verb'));
           if (lookup.verb_forms && isVerb) {
             verbFormsEl.innerHTML = renderVerbFormsChips(lookup.verb_forms);
             verbFormsEl.querySelectorAll('[data-speak]').forEach(btn => {
@@ -1140,8 +1164,11 @@ function bindEvents() {
         }
 
         console.log(`[AddWord Debug] 切換後欄位回填:`, {
-          example_en: m.example_en,
-          example_zh: m.example_zh,
+          pos: m.pos,
+          translation: m.translation,
+          definition: m.definition,
+          exampleEn: m.exampleEn,
+          exampleZh: m.exampleZh,
         });
       });
     }
@@ -1164,16 +1191,18 @@ function bindEvents() {
           // 以表單欄位覆蓋當前選中的那一筆（允許使用者微調）
           const selIdx = lookup.selected_meaning_index || 0;
           const updatedMeanings = lookup.meanings.map((m, i) => {
+            const nm = normalizeMeaning(m);
             if (i === selIdx) {
               return {
-                partOfSpeech: m.partOfSpeech,
-                definition_en: (document.getElementById('inp-def')?.value || '').trim() || m.definition_en,
-                translation_zh: (document.getElementById('inp-zh')?.value || '').trim() || m.translation_zh,
-                example_en: (document.getElementById('inp-ex')?.value || '').trim() || m.example_en,
-                example_zh: (document.getElementById('inp-ex-zh')?.textContent || '').trim() || m.example_zh,
+                pos: nm.pos,
+                label: nm.label,
+                translation: (document.getElementById('inp-zh')?.value || '').trim() || nm.translation,
+                definition: (document.getElementById('inp-def')?.value || '').trim() || nm.definition,
+                exampleEn: (document.getElementById('inp-ex')?.value || '').trim() || nm.exampleEn,
+                exampleZh: (document.getElementById('inp-ex-zh')?.textContent || '').trim() || nm.exampleZh,
               };
             }
-            return m;
+            return nm;
           });
           meanings = updatedMeanings;
           phonetic = (document.getElementById('inp-phonetic')?.value || '').trim() || lookup.phonetic;
@@ -1186,7 +1215,7 @@ function bindEvents() {
           const example_en = (document.getElementById('inp-ex')?.value || '').trim();
           const example_zh = (document.getElementById('inp-ex-zh')?.textContent || '').trim();
           if (!w || !definition_en) { toast('Word and definition are required'); return; }
-          meanings = [{ partOfSpeech: '', definition_en, translation_zh, example_en, example_zh }];
+          meanings = [{ pos: '', label: '', translation: translation_zh, definition: definition_en, exampleEn: example_en, exampleZh: example_zh }];
           phonetic = phoneticVal;
           selectedIdx = 0;
         }

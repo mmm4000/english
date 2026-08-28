@@ -8,7 +8,7 @@ import { getVerbForms } from '../utils/conjugations.js';
  *   phonetic: string,
  *   verb_forms: { base, third, past_tense, past_participle, present_participle } | null,
  *   meanings: [
- *     { partOfSpeech: '名詞', translation: '書、書籍', definition: '...', example: '...', example_zh: '...' },
+ *     { pos: '動詞', label: '[動詞] 奔跑、運作、經營', translation: '奔跑、運作、經營', definition: '...', exampleEn: '...', exampleZh: '...' },
  *   ]
  * }
  */
@@ -165,10 +165,10 @@ export async function translateSentence(enText) {
 
 async function attachExamplesToMeanings(meanings, word, verbForms) {
   const translatePromises = meanings.map(async (m) => {
-    if (m.example) return;
-    const enSentence = getSmartSentence(word, m.partOfSpeech, verbForms);
-    m.example = enSentence;
-    m.example_zh = await translateSentence(enSentence);
+    if (m.exampleEn) return;
+    const enSentence = getSmartSentence(word, m.pos, verbForms);
+    m.exampleEn = enSentence;
+    m.exampleZh = await translateSentence(enSentence);
   });
   await Promise.all(translatePromises);
 }
@@ -1267,17 +1267,115 @@ function mapPos(pos) {
   return POS_MAP[lower] || pos;
 }
 
+/* ─── 單字黑名單：永久剔除冷門詞性 ─── */
+
+const WORD_BLACKLIST = {
+  run: ['adjective', 'adj'],
+  book: ['adjective', 'adj', 'adverb', 'adv'],
+  launch: ['adjective', 'adj', 'adverb', 'adv'],
+  make: ['adjective', 'adj'],
+  take: ['adjective', 'adj'],
+  get: ['adjective', 'adj'],
+  go: ['adjective', 'adj'],
+  come: ['adjective', 'adj'],
+  see: ['adjective', 'adj'],
+  know: ['adjective', 'adj'],
+  think: ['adjective', 'adj'],
+  give: ['adjective', 'adj'],
+  find: ['adjective', 'adj'],
+  tell: ['adjective', 'adj'],
+  ask: ['adjective', 'adj'],
+  feel: ['adjective', 'adj'],
+  want: ['adjective', 'adj'],
+  call: ['adjective', 'adj'],
+  try: ['adjective', 'adj'],
+  need: ['adjective', 'adj'],
+  leave: ['adjective', 'adj'],
+  put: ['adjective', 'adj'],
+  mean: ['adjective', 'adj'],
+  keep: ['adjective', 'adj'],
+  begin: ['adjective', 'adj'],
+  show: ['adjective', 'adj'],
+  hear: ['adjective', 'adj'],
+  play: ['adjective', 'adj'],
+  move: ['adjective', 'adj'],
+  believe: ['adjective', 'adj'],
+  bring: ['adjective', 'adj'],
+  write: ['adjective', 'adj'],
+  provide: ['adjective', 'adj'],
+  sit: ['adjective', 'adj'],
+  stand: ['adjective', 'adj'],
+  lose: ['adjective', 'adj'],
+  pay: ['adjective', 'adj'],
+  meet: ['adjective', 'adj'],
+  include: ['adjective', 'adj'],
+  set: ['adjective', 'adj'],
+  learn: ['adjective', 'adj'],
+  change: ['adjective', 'adj'],
+  lead: ['adjective', 'adj'],
+  understand: ['adjective', 'adj'],
+  watch: ['adjective', 'adj'],
+  follow: ['adjective', 'adj'],
+  stop: ['adjective', 'adj'],
+  create: ['adjective', 'adj'],
+  speak: ['adjective', 'adj'],
+  read: ['adjective', 'adj'],
+  grow: ['adjective', 'adj'],
+  open: ['adjective', 'adj'],
+  walk: ['adjective', 'adj'],
+  win: ['adjective', 'adj'],
+  teach: ['adjective', 'adj'],
+  offer: ['adjective', 'adj'],
+  remember: ['adjective', 'adj'],
+  consider: ['adjective', 'adj'],
+  appear: ['adjective', 'adj'],
+  buy: ['adjective', 'adj'],
+  serve: ['adjective', 'adj'],
+  die: ['adjective', 'adj'],
+  send: ['adjective', 'adj'],
+  expect: ['adjective', 'adj'],
+  build: ['adjective', 'adj'],
+  stay: ['adjective', 'adj'],
+  fall: ['adjective', 'adj'],
+  cut: ['adjective', 'adj'],
+  reach: ['adjective', 'adj'],
+  kill: ['adjective', 'adj'],
+  remain: ['adjective', 'adj'],
+  suggest: ['adjective', 'adj'],
+  raise: ['adjective', 'adj'],
+  pass: ['adjective', 'adj'],
+  sell: ['adjective', 'adj'],
+  require: ['adjective', 'adj'],
+  report: ['adjective', 'adj'],
+  decide: ['adjective', 'adj'],
+  pull: ['adjective', 'adj'],
+  develop: ['adjective', 'adj'],
+  eat: ['adjective', 'adj'],
+  plan: ['adjective', 'adj'],
+  love: ['adjective', 'adj'],
+  use: ['adjective', 'adj'],
+};
+
 /* ─── 整合 ─── */
 
 function mergeMeanings(datamuseDefs, posTranslations, word) {
   const gtxKeys = Object.keys(posTranslations);
   console.log(`[Lookup Debug] 7-A. mergeMeanings: gtxKeys=`, gtxKeys);
+  const lowerWord = (word || '').toLowerCase();
+  const blacklist = WORD_BLACKLIST[lowerWord] || [];
 
-  if (gtxKeys.length > 0) {
-    const lowerWord = (word || '').toLowerCase();
+  // 過濾掉黑名單中的詞性
+  const filteredKeys = gtxKeys.filter(posKey => {
+    const enPosKey = REVERSE_POS_MAP[posKey] || posKey.toLowerCase();
+    if (blacklist.includes(enPosKey)) return false;
+    if (blacklist.includes(posKey)) return false;
+    return true;
+  });
+
+  if (filteredKeys.length > 0) {
     const curated = CURATED_ZH[lowerWord] || {};
 
-    const merged = gtxKeys.map((posKey) => {
+    const merged = filteredKeys.map((posKey) => {
       const zhPosLabel = mapPos(posKey);
       const enPosKey = REVERSE_POS_MAP[posKey] || posKey.toLowerCase();
 
@@ -1288,7 +1386,6 @@ function mergeMeanings(datamuseDefs, posTranslations, word) {
       } else if (curated[posKey]) {
         translation = curated[posKey];
       } else {
-        // 後備：使用 GTX 原始資料
         const zhTerms = posTranslations[posKey];
         translation = zhTerms ? zhTerms.join('、') : '';
       }
@@ -1316,11 +1413,15 @@ function mergeMeanings(datamuseDefs, posTranslations, word) {
         }
       }
 
+      const label = `[${zhPosLabel}] ${translation}`;
+
       return {
-        partOfSpeech: zhPosLabel,
+        pos: zhPosLabel,
+        label,
         translation,
         definition,
-        example: '',
+        exampleEn: '',
+        exampleZh: '',
       };
     });
     return merged;
@@ -1328,10 +1429,12 @@ function mergeMeanings(datamuseDefs, posTranslations, word) {
 
   return [
     {
-      partOfSpeech: '',
+      pos: '',
+      label: '',
       translation: '',
       definition: '',
-      example: '',
+      exampleEn: '',
+      exampleZh: '',
     },
   ];
 }
