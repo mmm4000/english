@@ -375,8 +375,11 @@ function renderAdd() {
 }
 
 function renderMeaningOptionLabel(m) {
-  const pos = m.partOfSpeech || '—';
+  let pos = m.partOfSpeech || '—';
   const zh = m.translation_zh || '';
+  // 防止重複前綴：若 pos 已包含 [xxx] 格式，先提取內部文字
+  const bracketMatch = pos.match(/^\[(.+)\]$/);
+  if (bracketMatch) pos = bracketMatch[1];
   if (!zh) return `[${pos}] 載入中…`;
   return `[${pos}] ${zh}`;
 }
@@ -970,7 +973,7 @@ function bindEvents() {
             word: w,
             phonetic: data.phonetic,
             meanings: cardMeanings,
-            verb_forms: null,
+            verb_forms: data.verb_forms || null,
             selected_meaning_index: 0,
           }];
           console.log(`[AddWord Debug] pendingLookups 已設定:`, pendingLookups[0]);
@@ -978,6 +981,20 @@ function bindEvents() {
           const first = cardMeanings[0];
           console.log(`[AddWord Debug] 第一筆釋義 (first):`, first);
           $('#add-fields').style.display = 'block';
+
+          // 渲染動詞變化
+          const verbFormsEl = document.getElementById('add-verb-forms');
+          if (verbFormsEl) {
+            if (data.verb_forms) {
+              verbFormsEl.innerHTML = renderVerbFormsChips(data.verb_forms);
+              verbFormsEl.querySelectorAll('[data-speak]').forEach(btn => {
+                btn.onclick = () => speak(btn.dataset.speak);
+              });
+            } else {
+              verbFormsEl.innerHTML = '';
+            }
+          }
+
           requestAnimationFrame(() => {
             const phonInp = document.getElementById('inp-phonetic');
             const zhInp = document.getElementById('inp-zh');

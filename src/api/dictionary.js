@@ -4,9 +4,9 @@
  * {
  *   word: string,
  *   phonetic: string,
+ *   verb_forms: { base, third, past_tense, past_participle, present_participle } | null,
  *   meanings: [
  *     { partOfSpeech: '名詞', translation: '書、書籍', definition: '...', example: '...' },
- *     { partOfSpeech: '動詞', translation: '預訂、預約', definition: '...', example: '...' },
  *   ]
  * }
  */
@@ -16,7 +16,7 @@ export async function lookupWord(rawWord) {
   if (!word) throw new Error('請輸入單字');
 
   // 並行請求三個來源
-  console.log(`[Lookup Debug] 2. 同時發起 Dictionary API + Datamuse + Google Translate 請求`);
+  console.log(`[Lookup Debug] 2. 同時發起 Dictionary API (CORS proxy) + Datamuse + Google Translate 請求`);
   const [dictData, datamuseData, transData] = await Promise.all([
     fetchDictionary(word),
     fetchDatamuse(word),
@@ -27,10 +27,12 @@ export async function lookupWord(rawWord) {
   console.log(`[Lookup Debug] 3. 解析各來源結果`);
   const englishMeanings = extractEnglishMeanings(dictData);
   const phonetic = extractPhonetic(dictData) || extractDatamusePhonetic(datamuseData);
+  const verbForms = extractVerbForms(dictData, word);
   const datamuseDefs = extractDatamuseDefs(datamuseData);
   console.log(`[Lookup Debug] 3-1. phonetic:`, phonetic);
-  console.log(`[Lookup Debug] 3-2. englishMeanings (Dictionary API):`, englishMeanings);
-  console.log(`[Lookup Debug] 3-3. datamuseDefs (Datamuse fallback):`, datamuseDefs);
+  console.log(`[Lookup Debug] 3-2. verbForms:`, verbForms);
+  console.log(`[Lookup Debug] 3-3. englishMeanings (Dictionary API):`, englishMeanings);
+  console.log(`[Lookup Debug] 3-4. datamuseDefs (Datamuse fallback):`, datamuseDefs);
 
   // 解析 Google GTX 辭典結果
   console.log(`[Lookup Debug] 4. 解析 Google GTX 辭典結果`);
@@ -42,16 +44,17 @@ export async function lookupWord(rawWord) {
   const meanings = mergeMeanings(englishMeanings, datamuseDefs, posTranslations, word);
   console.log(`[Lookup Debug] 5-1. mergeMeanings 最終結果:`, meanings);
 
-  const result = { word, phonetic, meanings };
+  const result = { word, phonetic, verb_forms: verbForms, meanings };
   console.log(`[Lookup Debug] 6. lookupWord 最終回傳:`, result);
   return result;
 }
 
-/* ─── Dictionary API (主要來源) ─── */
+/* ─── Dictionary API (透過 CORS proxy) ─── */
 
 async function fetchDictionary(word) {
-  const url = `https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(word)}`;
-  console.log(`[Lookup Debug] 2-A. 請求 Dictionary API: ${url}`);
+  const target = `https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(word)}`;
+  const url = `https://corsproxy.io/?url=${encodeURIComponent(target)}`;
+  console.log(`[Lookup Debug] 2-A. 請求 Dictionary API (via corsproxy.io):`, url);
   try {
     const res = await fetch(url);
     console.log(`[Lookup Debug] 2-A-1. Dictionary API HTTP 狀態碼:`, res.status, res.statusText);
@@ -63,7 +66,7 @@ async function fetchDictionary(word) {
     console.log(`[Lookup Debug] 2-A-3. Dictionary API 原始 JSON (前 500 字元):`, JSON.stringify(data).slice(0, 500));
     return data;
   } catch (err) {
-    console.error(`[Lookup Debug] 2-A-4. Dictionary API 例外錯誤 (CORS 或網路):`, err.message);
+    console.error(`[Lookup Debug] 2-A-4. Dictionary API 例外錯誤:`, err.message);
     return null;
   }
 }
@@ -108,6 +111,44 @@ function extractEnglishMeanings(data) {
   }
   console.log(`[Lookup Debug] 3-B. extractEnglishMeanings: 共提取 ${results.length} 個詞性`, results);
   return results;
+}
+
+function extractVerbForms(data, word) {
+  if (!data || !data[0]) {
+    console.log(`[Lookup Debug] 3-D. extractVerbForms: 無 Dictionary 資料`);
+    return null;
+  }
+  for (const entry of data) {
+    for (const m of entry.meanings || []) {
+      if (m.partOfSpeech !== 'verb') continue;
+      const forms = {};
+      for (const def of m.definitions || []) {
+        if (def.forms) {
+          for (const f of def.forms) {
+            if (f.form && f.form !== word) {
+              const label = (f.form || '').toLowerCase();
+              if (label.includes('past tense')) forms.past_tense = f.form;
+              else if (label.includes('past participle')) forms.past_participle = f.form;
+              else if (label.includes('present participle')) forms.present_participle = f.form;
+              else if (label.includes('third person singular')) forms.third = f.form;
+              else if (label.includes('plural')) forms.plural = f.form;
+            }
+          }
+        }
+      }
+      if (Object.keys(forms).length > 0) {
+        forms.base = word;
+        if (!forms.third) forms.third = word + 's';
+        if (!forms.past_tense) forms.past_tense = word + 'ed';
+        if (!forms.past_participle) forms.past_participle = word + 'ed';
+        if (!forms.present_participle) forms.present_participle = word + 'ing';
+        console.log(`[Lookup Debug] 3-D. extractVerbForms: 從 Dictionary API 提取到動詞變化`, forms);
+        return forms;
+      }
+    }
+  }
+  console.log(`[Lookup Debug] 3-D. extractVerbForms: Dictionary API 無動詞變化資料`);
+  return null;
 }
 
 /* ─── Datamuse API (備用英文辭典，無 CORS) ─── */
@@ -173,10 +214,6 @@ async function fetchGoogleTranslate(word) {
   }
 }
 
-/**
- * 解析 Google GTX 的 res[1]（辭典結構），
- * 回傳 { noun: ['書','書籍','本子'], verb: ['預訂','預約'], ... }
- */
 function parsePosTranslations(data) {
   const map = {};
   if (!data?.[1]) {
@@ -186,8 +223,10 @@ function parsePosTranslations(data) {
 
   console.log(`[Lookup Debug] 4-A. parsePosTranslations: data[1] 共 ${data[1].length} 組詞性群組`);
   for (const group of data[1]) {
-    const pos = (group[0] || '').toLowerCase();
+    const rawPos = group[0] || '';
     const terms = group[1];
+    // 判斷是否為中文 POS，若是則保留原文，否則 toLowerCase
+    const pos = /[\u4e00-\u9fff]/.test(rawPos) ? rawPos : rawPos.toLowerCase();
     console.log(`[Lookup Debug] 4-A-1. 詞性群組: pos="${pos}", terms=`, terms);
     if (!pos || !Array.isArray(terms)) continue;
 
@@ -222,8 +261,14 @@ const POS_MAP = {
   prefix: '字首',
 };
 
+const REVERSE_POS_MAP = {};
+for (const [en, zh] of Object.entries(POS_MAP)) {
+  REVERSE_POS_MAP[zh] = en;
+}
+
 function mapPos(pos) {
-  return POS_MAP[pos.toLowerCase()] || pos;
+  const lower = (pos || '').toLowerCase();
+  return POS_MAP[lower] || pos;
 }
 
 /* ─── 整合：以 Google GTX 詞性為骨架 ─── */
@@ -237,22 +282,10 @@ function autoGenerateExample(word, posKey) {
   return `The word "${word}" is important.`;
 }
 
-const REVERSE_POS_MAP = {};
-for (const [en, zh] of Object.entries(POS_MAP)) {
-  REVERSE_POS_MAP[zh] = en;
-}
-
-/**
- * 以 Google GTX 辭典的詞性為主要骨架，
- * 從 Dictionary API / Datamuse 取英文定義，
- * 從 GTX 取中文翻譯。
- * 即使 Dictionary API 完全失敗 (CORS)，也能產生多個釋義選項。
- */
 function mergeMeanings(englishMeanings, datamuseDefs, posTranslations, word) {
   const gtxKeys = Object.keys(posTranslations);
   console.log(`[Lookup Debug] 5-A. mergeMeanings: gtxKeys=`, gtxKeys, `englishMeanings=`, englishMeanings.length, `筆`);
 
-  // 建立 englishMeanings 的 POS -> definition 索引 (英文鍵)
   const dictByPos = {};
   for (const em of englishMeanings) {
     dictByPos[em.partOfSpeech.toLowerCase()] = em;
@@ -265,23 +298,19 @@ function mergeMeanings(englishMeanings, datamuseDefs, posTranslations, word) {
       const translation = zhTerms ? zhTerms.join('、') : '';
       const zhPosLabel = mapPos(posKey);
 
-      // posKey 可能是中文（GTX），轉回英文鍵查找
       const enPosKey = REVERSE_POS_MAP[posKey] || posKey.toLowerCase();
       const dictEntry = dictByPos[enPosKey] || dictByPos[posKey.toLowerCase()];
       let definition = dictEntry?.definition || '';
       let example = dictEntry?.example || '';
 
-      // 若 Dictionary API 無該詞性，嘗試 Datamuse
       if (!definition && datamuseDefs[enPosKey]) {
         definition = datamuseDefs[enPosKey];
       }
 
-      // 若仍無例句，自動生成
       if (!example && word) {
         example = autoGenerateExample(word, posKey);
       }
 
-      // 最終保底：用中文翻譯作為英文佔位
       if (!definition && translation) {
         definition = `[${zhPosLabel}] ${translation}`;
       }
@@ -298,7 +327,6 @@ function mergeMeanings(englishMeanings, datamuseDefs, posTranslations, word) {
     return merged;
   }
 
-  // 無 GTX 詞性資料時，退回到 englishMeanings
   if (englishMeanings.length > 0) {
     console.log(`[Lookup Debug] 5-E. mergeMeanings: 無 GTX 詞性，退回 englishMeanings 骨架`);
     return englishMeanings.map((em) => {
@@ -315,7 +343,6 @@ function mergeMeanings(englishMeanings, datamuseDefs, posTranslations, word) {
     });
   }
 
-  // 完全無資料：產生基本保底項
   console.log(`[Lookup Debug] 5-F. mergeMeanings: 完全無資料，產生保底項`);
   return [
     {
