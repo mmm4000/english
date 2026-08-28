@@ -105,26 +105,35 @@ async function translateMeaningOnDemand(m, word) {
 }
 
 async function translateMeaningsInBackground(meanings, word) {
+  console.log(`[AddWord Debug] translateMeaningsInBackground: 開始，word="${word}", meanings=${meanings.length} 筆`);
   const texts = [word];
   for (const m of meanings.slice(0, 4)) {
     texts.push(m.definition_en || '');
     texts.push(m.example_en || '');
   }
+  console.log(`[AddWord Debug] translateMeaningsInBackground: 準備翻譯 ${texts.length} 段文字`, texts);
 
   let results = await batchTranslate(texts);
+  console.log(`[AddWord Debug] translateMeaningsInBackground: batchTranslate 結果`, results);
 
   let idx = 0;
   const wordZh = results[idx++] || '';
+  console.log(`[AddWord Debug] translateMeaningsInBackground: wordZh="${wordZh}"`);
   for (const m of meanings.slice(0, 4)) {
     const defZh = results[idx++] || '';
     const exZh = results[idx++] || '';
     if (defZh) m.translation_zh = defZh;
     if (exZh) m.example_zh = exZh;
     if (!m.translation_zh && wordZh) m.translation_zh = wordZh;
+    console.log(`[AddWord Debug] translateMeaningsInBackground: ${m.partOfSpeech} =>`, {
+      translation_zh: m.translation_zh,
+      example_zh: m.example_zh,
+    });
   }
 
   const needsRetry = meanings.slice(0, 4).filter(m => !m.translation_zh);
   if (needsRetry.length > 0) {
+    console.log(`[AddWord Debug] translateMeaningsInBackground: 有 ${needsRetry.length} 筆缺少翻譯，重試`);
     const retryTexts = needsRetry.map(m => m.definition_en || '');
     const retryResults = await batchTranslate(retryTexts);
     for (let i = 0; i < needsRetry.length; i++) {
@@ -135,19 +144,22 @@ async function translateMeaningsInBackground(meanings, word) {
 
   if (currentView === 'add') {
     const sel = document.getElementById('meaning-select');
-    if (sel && meanings.length > 1) {
+    if (sel && meanings.length >= 1) {
       sel.innerHTML = meanings.map((m, i) => {
         return `<option value="${i}">${renderMeaningOptionLabel(m)}</option>`;
       }).join('');
+      console.log(`[AddWord Debug] translateMeaningsInBackground: 下拉選單已更新 (含翻譯)`);
     }
     const inpZh = $('#inp-zh');
     const selIdx = pendingLookups[0]?.selected_meaning_index || 0;
     if (inpZh && meanings[selIdx] && !inpZh.value) {
       inpZh.value = meanings[selIdx].translation_zh || '';
+      console.log(`[AddWord Debug] translateMeaningsInBackground: inp-zh 已填入`, meanings[selIdx].translation_zh);
     }
     if (pendingLookups[0]) {
       pendingLookups[0].wordZh = wordZh;
       pendingLookups[0].meanings = meanings;
+      console.log(`[AddWord Debug] translateMeaningsInBackground: pendingLookups.meanings 已更新`);
     }
   }
 }
@@ -891,6 +903,7 @@ function bindEvents() {
     const btnLookup = $('#btn-lookup');
     const btnSpeakInput = $('#btn-speak-input');
     const btnGotoDup = $('#btn-goto-dup');
+    const btnAddSingle = $('#btn-add-single');
 
     if (inpWord) {
       inpWord.addEventListener('input', () => {
@@ -916,6 +929,7 @@ function bindEvents() {
         const word = inpWord ? inpWord.value.trim() : '';
         if (!word) return;
         const w = word.toLowerCase();
+        console.log(`[AddWord Debug] 使用者點擊 Lookup，查詢: "${w}"`);
         const existing = await findCardByWord(w);
         if (existing) {
           showDupWarning(existing.id);
@@ -928,8 +942,12 @@ function bindEvents() {
         hideDupWarning();
 
         try {
-          const data = await lookupWord(word);
+          console.log(`[AddWord Debug] 呼叫 lookupWord("${w}")...`);
+          const data = await lookupWord(w);
+          console.log(`[AddWord Debug] lookupWord 回傳:`, data);
+
           if (!data || !data.meanings || data.meanings.length === 0) {
+            console.warn(`[AddWord Debug] 查詢結果無 meanings，顯示手動填寫模式`);
             toast('無法自動取得釋義，請手動填寫');
             $('#add-fields').style.display = 'block';
             $('#meaning-selector-wrap').style.display = 'none';
@@ -946,6 +964,7 @@ function bindEvents() {
             example_en: m.example,
             example_zh: '',
           }));
+          console.log(`[AddWord Debug] 轉換後 cardMeanings:`, cardMeanings);
 
           pendingLookups = [{
             word: w,
@@ -954,8 +973,10 @@ function bindEvents() {
             verb_forms: null,
             selected_meaning_index: 0,
           }];
+          console.log(`[AddWord Debug] pendingLookups 已設定:`, pendingLookups[0]);
 
           const first = cardMeanings[0];
+          console.log(`[AddWord Debug] 第一筆釋義 (first):`, first);
           $('#add-fields').style.display = 'block';
           requestAnimationFrame(() => {
             const phonInp = document.getElementById('inp-phonetic');
@@ -968,28 +989,38 @@ function bindEvents() {
             if (defInp) defInp.value = first.definition_en || '';
             if (exInp) exInp.value = first.example_en || '';
             if (exZhEl) exZhEl.textContent = '';
+            console.log(`[AddWord Debug] 欄位回填完成:`, {
+              phonetic: data.phonetic,
+              translation_zh: first.translation_zh,
+              definition_en: first.definition_en,
+              example_en: first.example_en,
+            });
           });
 
           const selWrap = document.getElementById('meaning-selector-wrap');
           const sel = document.getElementById('meaning-select');
           if (selWrap && sel) {
-            if (cardMeanings.length > 1) {
+            if (cardMeanings.length >= 1) {
               selWrap.style.display = 'block';
               sel.innerHTML = cardMeanings.map((m, i) => {
                 return `<option value="${i}">${renderMeaningOptionLabel(m)}</option>`;
               }).join('');
               sel.value = '0';
+              console.log(`[AddWord Debug] 釋義下拉選單已建立，共 ${cardMeanings.length} 項`);
             } else {
               selWrap.style.display = 'none';
               sel.innerHTML = '';
+              console.log(`[AddWord Debug] 無釋義資料，隱藏下拉選單`);
             }
           }
 
           status.textContent = '';
           btnLookup.disabled = false;
 
+          console.log(`[AddWord Debug] 開始背景翻譯 (${cardMeanings.length} 筆 meanings)...`);
           translateMeaningsInBackground(cardMeanings, w);
-        } catch (_) {
+        } catch (err) {
+          console.error(`[AddWord Debug] lookupWord 例外錯誤:`, err);
           toast('無法自動取得釋義，請手動填寫');
           $('#add-fields').style.display = 'block';
           $('#meaning-selector-wrap').style.display = 'none';
@@ -1056,10 +1087,15 @@ function bindEvents() {
         if (!lookup) return;
         const idx = parseInt(meaningSelect.value);
         if (isNaN(idx) || !lookup.meanings[idx]) return;
+        console.log(`[AddWord Debug] 釋義切換: index=${idx}, meanings[${
+          idx
+        }]=`, lookup.meanings[idx]);
         lookup.selected_meaning_index = idx;
         const m = lookup.meanings[idx];
         if (!m.translation_zh || !m.example_zh) {
+          console.log(`[AddWord Debug] 該釋義缺少翻譯，觸發 translateMeaningOnDemand`);
           await translateMeaningOnDemand(m, lookup.word);
+          console.log(`[AddWord Debug] translateMeaningOnDemand 完成:`, m);
         }
         const phonInp = document.getElementById('inp-phonetic');
         const zhInp = document.getElementById('inp-zh');
@@ -1071,6 +1107,13 @@ function bindEvents() {
         if (defInp) defInp.value = m.definition_en || '';
         if (exInp) exInp.value = m.example_en || '';
         if (exZhEl) exZhEl.textContent = m.example_zh || '';
+        console.log(`[AddWord Debug] 切換後欄位回填:`, {
+          phonetic: lookup.phonetic,
+          translation_zh: m.translation_zh,
+          definition_en: m.definition_en,
+          example_en: m.example_en,
+          example_zh: m.example_zh,
+        });
       });
     }
 
