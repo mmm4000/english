@@ -7,7 +7,6 @@
  *   meanings: [
  *     { partOfSpeech: '名詞', translation: '書、書籍', definition: '...', example: '...' },
  *     { partOfSpeech: '動詞', translation: '預訂、預約', definition: '...', example: '...' },
- *     ...
  *   ]
  * }
  */
@@ -15,21 +14,15 @@ export async function lookupWord(rawWord) {
   const word = rawWord.trim().toLowerCase();
   if (!word) throw new Error('請輸入單字');
 
-  // 1. 並行請求 Dictionary API + Google Translate GTX
   const [dictData, transData] = await Promise.all([
     fetchDictionary(word),
     fetchGoogleTranslate(word),
   ]);
 
-  // 2. 從 Dictionary API 提取所有 meanings（每個詞性一個）
   const englishMeanings = extractEnglishMeanings(dictData);
   const phonetic = extractPhonetic(dictData);
-
-  // 3. 從 Google GTX 提取各詞性的中文辭典釋義
   const posTranslations = parsePosTranslations(transData);
-
-  // 4. 整合：將英文釋義與中文辭典對應
-  const meanings = mergeMeanings(englishMeanings, posTranslations, word);
+  const meanings = mergeMeanings(englishMeanings, posTranslations);
 
   return { word, phonetic, meanings };
 }
@@ -59,10 +52,6 @@ function extractPhonetic(data) {
   );
 }
 
-/**
- * 從 Dictionary API 回傳中提取所有 meanings，
- * 每個 partOfSpeech 取第一個有 definition 的項目。
- */
 function extractEnglishMeanings(data) {
   if (!data || !data[0]) return [];
   const results = [];
@@ -101,17 +90,11 @@ async function fetchGoogleTranslate(word) {
   }
 }
 
-/**
- * 解析 Google GTX 的 res[1]（辭典結構），
- * 回傳 { noun: ['書','書籍','本子'], verb: ['預訂','預約'], ... }
- */
 function parsePosTranslations(data) {
   const map = {};
   if (!data?.[1]) return map;
 
   for (const group of data[1]) {
-    // group[0] = 詞類英文 (noun, verb, adjective, ...)
-    // group[1] = 該詞性下的中文釋義陣列
     const pos = (group[0] || '').toLowerCase();
     const terms = group[1];
     if (!pos || !Array.isArray(terms)) continue;
@@ -151,22 +134,9 @@ function mapPos(pos) {
 
 /* ─── 整合 ─── */
 
-/**
- * 將英文釋義與中文辭典翻譯合併。
- * 若 GTX 有該詞性的辭典釋義，優先使用；
- * 否則 fallback 為空白（讓 UI 顯示「暫無中文釋義」）。
- */
-function mergeMeanings(englishMeanings, posTranslations, word) {
+function mergeMeanings(englishMeanings, posTranslations) {
   if (englishMeanings.length === 0) {
-    // 完全查不到時，嘗試用 GTX 的直譯做一個保底項
-    return [
-      {
-        partOfSpeech: '',
-        translation: '',
-        definition: '',
-        example: '',
-      },
-    ];
+    return [{ partOfSpeech: '', translation: '', definition: '', example: '' }];
   }
 
   return englishMeanings.map((em) => {

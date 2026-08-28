@@ -123,7 +123,6 @@ async function translateMeaningsInBackground(meanings, word) {
     if (!m.translation_zh && wordZh) m.translation_zh = wordZh;
   }
 
-  /* Retry once for meanings still missing translations */
   const needsRetry = meanings.slice(0, 4).filter(m => !m.translation_zh);
   if (needsRetry.length > 0) {
     const retryTexts = needsRetry.map(m => m.definition_en || '');
@@ -135,48 +134,16 @@ async function translateMeaningsInBackground(meanings, word) {
   }
 
   if (currentView === 'add') {
-    const listEl = $('#meanings-list');
-    if (listEl) {
-      listEl.innerHTML = renderMeaningsList(meanings);
-      listEl.querySelectorAll('[data-speak-ex]').forEach(el => {
-        el.onclick = () => speak(el.dataset.speakEx);
-      });
-      listEl.querySelectorAll('[data-refresh-ex-meaning]').forEach(btn => {
-        btn.onclick = async (e) => {
-          e.stopPropagation();
-          const meaningIdx = parseInt(btn.dataset.refreshExMeaning);
-          if (!meanings[meaningIdx]) return;
-          const m = meanings[meaningIdx];
-          const cache = getTatoebaCache(word, meaningIdx);
-          if (cache.examples.length === 0) {
-            let results = [];
-            const local = getLocalExample(word);
-            if (local) results.push({ example_en: local.en, example_zh: local.zh });
-            try {
-              const tResults = await fetchTatoebaExamples(word);
-              results = results.concat(tResults);
-            } catch (_) {}
-            if (results.length === 0) {
-              const auto = generateAutoExample(word, m.partOfSpeech || '');
-              results.push({ example_en: auto.en, example_zh: auto.zh });
-            }
-            cache.examples = results;
-            cache.currentIdx = -1;
-          }
-          cache.currentIdx = (cache.currentIdx + 1) % cache.examples.length;
-          const ex = cache.examples[cache.currentIdx];
-          m.example_en = ex.example_en;
-          m.example_zh = ex.example_zh;
-          listEl.innerHTML = renderMeaningsList(meanings);
-          listEl.querySelectorAll('[data-speak-ex]').forEach(el2 => {
-            el2.onclick = () => speak(el2.dataset.speakEx);
-          });
-        };
-      });
+    const sel = document.getElementById('meaning-select');
+    if (sel && meanings.length > 1) {
+      sel.innerHTML = meanings.map((m, i) => {
+        return `<option value="${i}">${renderMeaningOptionLabel(m)}</option>`;
+      }).join('');
     }
     const inpZh = $('#inp-zh');
-    if (inpZh && meanings.length === 1 && wordZh) {
-      inpZh.value = wordZh;
+    const selIdx = pendingLookups[0]?.selected_meaning_index || 0;
+    if (inpZh && meanings[selIdx] && !inpZh.value) {
+      inpZh.value = meanings[selIdx].translation_zh || '';
     }
     if (pendingLookups[0]) {
       pendingLookups[0].wordZh = wordZh;
@@ -368,14 +335,8 @@ function renderAdd() {
         <button id="btn-goto-dup" style="background:#f59e0b;color:#000;border:none;padding:.4rem .8rem;border-radius:.3rem;cursor:pointer;font-size:.85rem;">前往查看</button>
       </div>
       <div id="add-status" style="color:#94a3b8;font-size:.85rem;margin-bottom:.5rem;"></div>
-      <div id="add-meanings" style="display:none;">
-        <div id="add-verb-forms"></div>
-        <div id="meanings-list"></div>
-        <div style="margin-top:1rem;">
-          <button id="btn-add" style="width:100%;background:#22c55e;color:#fff;border:none;padding:1rem;border-radius:.5rem;font-size:1rem;cursor:pointer;">Add to Library</button>
-        </div>
-      </div>
       <div id="add-fields" style="display:none;">
+        <div id="add-verb-forms"></div>
         <div id="meaning-selector-wrap" style="display:none;margin-bottom:.8rem;">
           <label style="color:#94a3b8;font-size:.8rem;display:block;margin-bottom:.3rem;">釋義切換</label>
           <select id="meaning-select" style="width:100%;padding:.7rem;border:1px solid #334155;border-radius:.5rem;background:#1e293b;color:#f8fafc;font-size:.95rem;"></select>
@@ -401,35 +362,11 @@ function renderAdd() {
   `;
 }
 
-function renderMeaningsList(meanings) {
-  return meanings.map((m, i) => {
-    const zhDisplay = m.translation_zh
-      ? m.translation_zh
-      : '<span style="color:#64748b;">（暫無中文釋義）</span>';
-    const exEnDisplay = m.example_en
-      ? `<div style="color:#e2e8f0;font-style:italic;font-size:.8rem;">${m.example_en}</div>`
-      : `<div style="color:#64748b;font-style:italic;font-size:.8rem;">暫無例句</div>`;
-    const exZhDisplay = m.example_zh
-      ? `<div style="color:#94a3b8;font-size:.8rem;margin-top:.2rem;">${m.example_zh}</div>`
-      : '';
-    return `
-    <div data-meaning-idx="${i}" style="background:#0f172a;border:1px solid #334155;border-radius:.5rem;padding:.8rem;margin-bottom:.5rem;cursor:pointer;" class="meaning-card">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.3rem;">
-        <span style="color:#3b82f6;font-weight:bold;font-size:.9rem;">[${m.partOfSpeech}]</span>
-        <input type="radio" name="meaning-choice" value="${i}" ${i===0?'checked':''} style="cursor:pointer;" />
-      </div>
-      <div style="color:#f8fafc;font-size:.95rem;margin-bottom:.25rem;">${zhDisplay}</div>
-      <div style="color:#cbd5e1;font-size:.85rem;margin-bottom:.25rem;">${m.definition_en}</div>
-      <div style="display:flex;justify-content:space-between;align-items:center;">
-        ${exEnDisplay}
-        <div style="display:flex;gap:.3rem;flex-shrink:0;margin-left:.5rem;">
-          ${m.example_en ? `<button data-speak-ex="${escAttr(m.example_en)}" style="background:none;border:none;color:#3b82f6;font-size:.85rem;cursor:pointer;padding:.3rem;min-height:44px;min-width:44px;">🔊</button>` : ''}
-          <button data-refresh-ex-meaning="${i}" style="background:none;border:none;color:#f59e0b;font-size:.85rem;cursor:pointer;padding:.3rem;min-height:44px;min-width:44px;" title="換一句例句">🔄</button>
-        </div>
-      </div>
-      ${exZhDisplay}
-    </div>`;
-  }).join('');
+function renderMeaningOptionLabel(m) {
+  const pos = m.partOfSpeech || '—';
+  const zh = m.translation_zh || '';
+  if (!zh) return `[${pos}] 載入中…`;
+  return `[${pos}] ${zh}`;
 }
 
 function renderQuiz() {
@@ -952,7 +889,6 @@ function bindEvents() {
   if (currentView === 'add') {
     const inpWord = $('#inp-word');
     const btnLookup = $('#btn-lookup');
-    const btnAdd = $('#btn-add');
     const btnSpeakInput = $('#btn-speak-input');
     const btnGotoDup = $('#btn-goto-dup');
 
@@ -971,39 +907,8 @@ function bindEvents() {
       };
     }
 
-    document.querySelectorAll('[data-refresh-ex-meaning]').forEach(btn => {
-      btn.onclick = async (e) => {
-        e.stopPropagation();
-        const meaningIdx = parseInt(btn.dataset.refreshExMeaning);
-        const lookup = pendingLookups[0];
-        if (!lookup || !lookup.meanings || !lookup.meanings[meaningIdx]) return;
-        const m = lookup.meanings[meaningIdx];
-        const cache = getTatoebaCache(lookup.word, meaningIdx);
-        if (cache.examples.length === 0) {
-          let results = [];
-          const local = getLocalExample(lookup.word);
-          if (local) results.push({ example_en: local.en, example_zh: local.zh });
-          try {
-            const tResults = await fetchTatoebaExamples(lookup.word);
-            results = results.concat(tResults);
-          } catch (_) {}
-          if (results.length === 0) {
-            const auto = generateAutoExample(lookup.word, m.partOfSpeech || '');
-            results.push({ example_en: auto.en, example_zh: auto.zh });
-          }
-          cache.examples = results;
-          cache.currentIdx = -1;
-        }
-        cache.currentIdx = (cache.currentIdx + 1) % cache.examples.length;
-        const ex = cache.examples[cache.currentIdx];
-        m.example_en = ex.example_en;
-        m.example_zh = ex.example_zh;
-        const listEl = $('#meanings-list');
-        if (listEl) listEl.innerHTML = renderMeaningsList(lookup.meanings);
-        document.querySelectorAll('[data-speak-ex]').forEach(el => {
-          el.onclick = () => speak(el.dataset.speakEx);
-        });
-      };
+    document.querySelectorAll('[data-speak-ex]').forEach(el => {
+      el.onclick = () => speak(el.dataset.speakEx);
     });
 
     if (btnLookup) {
@@ -1034,7 +939,6 @@ function bindEvents() {
             return;
           }
 
-          // 將 API 回傳的 meanings 轉成 card 格式
           const cardMeanings = data.meanings.map(m => ({
             partOfSpeech: m.partOfSpeech,
             definition_en: m.definition,
@@ -1051,10 +955,8 @@ function bindEvents() {
             selected_meaning_index: 0,
           }];
 
-          // 填入第一筆釋義到表單
           const first = cardMeanings[0];
           $('#add-fields').style.display = 'block';
-          $('#add-meanings').style.display = 'none';
           requestAnimationFrame(() => {
             const phonInp = document.getElementById('inp-phonetic');
             const zhInp = document.getElementById('inp-zh');
@@ -1068,17 +970,13 @@ function bindEvents() {
             if (exZhEl) exZhEl.textContent = '';
           });
 
-          // 填入釋義切換下拉選單
           const selWrap = document.getElementById('meaning-selector-wrap');
           const sel = document.getElementById('meaning-select');
           if (selWrap && sel) {
             if (cardMeanings.length > 1) {
               selWrap.style.display = 'block';
               sel.innerHTML = cardMeanings.map((m, i) => {
-                const label = m.translation_zh
-                  ? `[${m.partOfSpeech}] ${m.translation_zh}`
-                  : `[${m.partOfSpeech}] ${m.definition_en.slice(0, 30)}`;
-                return `<option value="${i}">${label}</option>`;
+                return `<option value="${i}">${renderMeaningOptionLabel(m)}</option>`;
               }).join('');
               sel.value = '0';
             } else {
@@ -1089,6 +987,8 @@ function bindEvents() {
 
           status.textContent = '';
           btnLookup.disabled = false;
+
+          translateMeaningsInBackground(cardMeanings, w);
         } catch (_) {
           toast('無法自動取得釋義，請手動填寫');
           $('#add-fields').style.display = 'block';
@@ -1151,13 +1051,16 @@ function bindEvents() {
     // ─── 釋義切換下拉選單 ───
     const meaningSelect = document.getElementById('meaning-select');
     if (meaningSelect) {
-      meaningSelect.addEventListener('change', () => {
+      meaningSelect.addEventListener('change', async () => {
         const lookup = pendingLookups[0];
         if (!lookup) return;
         const idx = parseInt(meaningSelect.value);
         if (isNaN(idx) || !lookup.meanings[idx]) return;
         lookup.selected_meaning_index = idx;
         const m = lookup.meanings[idx];
+        if (!m.translation_zh || !m.example_zh) {
+          await translateMeaningOnDemand(m, lookup.word);
+        }
         const phonInp = document.getElementById('inp-phonetic');
         const zhInp = document.getElementById('inp-zh');
         const defInp = document.getElementById('inp-def');
@@ -1171,49 +1074,6 @@ function bindEvents() {
       });
     }
 
-    if (btnAdd) {
-      btnAdd.onclick = async () => {
-        const lookup = pendingLookups[0];
-        if (!lookup || !lookup.meanings || lookup.meanings.length === 0) {
-          toast('No meaning data available');
-          return;
-        }
-        const word = lookup.word;
-        const dup = await findCardByWord(word);
-        if (dup) {
-          showDupWarning(dup.id);
-          toast('此單字已存在，請勿重複新增');
-          return;
-        }
-        const meanings = lookup.meanings.map(m => ({
-          partOfSpeech: m.partOfSpeech,
-          definition_en: m.definition_en,
-          translation_zh: m.translation_zh,
-          example_en: m.example_en,
-          example_zh: m.example_zh,
-        }));
-        const now = new Date();
-        const card = {
-          id: uuid(),
-          word,
-          phonetic: lookup.phonetic,
-          meanings,
-          verb_forms: lookup.verb_forms || null,
-          selected_meaning_index: lookup.selected_meaning_index || 0,
-          repetition: 0,
-          interval: 0,
-          ease_factor: 2.5,
-          next_due: now.toISOString(),
-        };
-        await saveCard(card);
-        allCards.push(card);
-        currentView = 'home';
-        render();
-        toast(`"${word}" added!`);
-      };
-    }
-
-    const btnAddSingle = $('#btn-add-single');
     if (btnAddSingle) {
       btnAddSingle.onclick = async () => {
         const w = (inpWord ? inpWord.value.trim() : '').toLowerCase();
