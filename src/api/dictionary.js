@@ -46,7 +46,7 @@ export async function lookupWord(rawWord) {
 
   // GTX 辭典
   console.log(`[Lookup Debug] 6. 解析 Google GTX 辭典結果`);
-  const posTranslations = parsePosTranslations(transData);
+  const posTranslations = parsePosTranslations(transData, word);
   console.log(`[Lookup Debug] 6-1. posTranslations:`, posTranslations);
 
   // 整合 meanings
@@ -278,6 +278,104 @@ const POS_PRIORITY = {
   '冠詞': 10, 'article': 10,
 };
 
+/* ─── 單字專屬詞性排序（覆寫全局優先級） ─── */
+
+const WORD_POS_ORDER = {
+  book: { noun: 1, verb: 2 },
+  run: { verb: 1, noun: 2 },
+  launch: { verb: 1, noun: 2 },
+  make: { verb: 1, noun: 2 },
+  take: { verb: 1, noun: 2 },
+  get: { verb: 1 },
+  go: { verb: 1, noun: 2 },
+  come: { verb: 1 },
+  see: { verb: 1 },
+  know: { verb: 1 },
+  think: { verb: 1 },
+  give: { verb: 1, noun: 2 },
+  find: { verb: 1 },
+  tell: { verb: 1 },
+  ask: { verb: 1 },
+  work: { noun: 1, verb: 2 },
+  feel: { verb: 1, noun: 2 },
+  want: { verb: 1 },
+  call: { verb: 1, noun: 2 },
+  try: { verb: 1, noun: 2 },
+  need: { verb: 1, noun: 2 },
+  leave: { verb: 1, noun: 2 },
+  put: { verb: 1 },
+  mean: { verb: 1 },
+  keep: { verb: 1 },
+  begin: { verb: 1 },
+  show: { verb: 1, noun: 2 },
+  hear: { verb: 1 },
+  play: { verb: 1, noun: 2 },
+  move: { verb: 1, noun: 2 },
+  live: { verb: 1, adjective: 2 },
+  believe: { verb: 1 },
+  bring: { verb: 1 },
+  write: { verb: 1 },
+  provide: { verb: 1 },
+  sit: { verb: 1 },
+  stand: { verb: 1, noun: 2 },
+  lose: { verb: 1 },
+  pay: { verb: 1, noun: 2 },
+  meet: { verb: 1 },
+  include: { verb: 1 },
+  set: { verb: 1, noun: 2 },
+  learn: { verb: 1 },
+  change: { verb: 1, noun: 2 },
+  lead: { verb: 1, noun: 2 },
+  understand: { verb: 1 },
+  watch: { verb: 1, noun: 2 },
+  follow: { verb: 1 },
+  stop: { verb: 1, noun: 2 },
+  create: { verb: 1 },
+  speak: { verb: 1 },
+  read: { verb: 1 },
+  grow: { verb: 1 },
+  open: { verb: 1, adjective: 2 },
+  walk: { verb: 1, noun: 2 },
+  win: { verb: 1, noun: 2 },
+  teach: { verb: 1 },
+  offer: { verb: 1, noun: 2 },
+  remember: { verb: 1 },
+  consider: { verb: 1 },
+  appear: { verb: 1 },
+  buy: { verb: 1 },
+  serve: { verb: 1 },
+  die: { verb: 1 },
+  send: { verb: 1 },
+  expect: { verb: 1 },
+  build: { verb: 1, noun: 2 },
+  stay: { verb: 1 },
+  fall: { verb: 1, noun: 2 },
+  cut: { verb: 1, noun: 2 },
+  reach: { verb: 1, noun: 2 },
+  kill: { verb: 1 },
+  remain: { verb: 1 },
+  suggest: { verb: 1 },
+  raise: { verb: 1 },
+  pass: { verb: 1, noun: 2 },
+  sell: { verb: 1 },
+  require: { verb: 1 },
+  report: { verb: 1, noun: 2 },
+  decide: { verb: 1 },
+  pull: { verb: 1, noun: 2 },
+  develop: { verb: 1 },
+  eat: { verb: 1 },
+  plan: { verb: 1, noun: 2 },
+  love: { verb: 1, noun: 2 },
+  use: { verb: 1, noun: 2 },
+  type: { noun: 1, verb: 2 },
+  list: { noun: 1, verb: 2 },
+  form: { noun: 1, verb: 2 },
+  charge: { verb: 1, noun: 2 },
+  produce: { verb: 1, noun: 2 },
+  result: { noun: 1, verb: 2 },
+  market: { noun: 1, verb: 2 },
+};
+
 /* ─── 常見單字：各詞性標準中文釋義 ─── */
 
 const CURATED_ZH = {
@@ -388,10 +486,10 @@ const COLLOCATIONS = {
       'They managed to book the conference room well in advance.',
     ],
     noun: [
-      'I am currently reading a fascinating book about modern history.',
-      'This book provides comprehensive guidelines for beginners.',
-      'She borrowed an interesting book from the library yesterday.',
-      'The professor recommended an excellent book on artificial intelligence.',
+      'This comprehensive book offers valuable insights into modern economics.',
+      'The reference book on the shelf has been used by generations of students.',
+      'Every book in the library collection is catalogued by subject and author.',
+      'She purchased a beautiful book at the independent bookstore downtown.',
     ],
   },
   run: {
@@ -402,10 +500,10 @@ const COLLOCATIONS = {
       'We need to run a diagnostic test before installing the software.',
     ],
     noun: [
-      'He went for a quick run around the neighborhood before breakfast.',
-      'The daily run helps her stay focused and energized throughout the day.',
+      'A quick morning run around the park is part of my daily routine.',
+      'The evening run along the river trail offers beautiful sunset views.',
       'The company had a remarkable run of success over the past decade.',
-      'She completed the marathon run in just under four hours.',
+      'She completed the entire run in just under thirty minutes.',
     ],
   },
   provide: {
@@ -424,10 +522,10 @@ const COLLOCATIONS = {
       'She decided to launch her own online business this summer.',
     ],
     noun: [
-      'The product launch attracted hundreds of journalists and bloggers.',
-      'The launch of the new service was a huge success.',
-      'Attendees gathered to watch the official launch ceremony.',
-      'The launch date has been moved up by two weeks.',
+      'The product launch was a tremendous success with record attendance.',
+      'The scheduled rocket launch was postponed due to severe weather conditions.',
+      'The launch of the new service attracted widespread media coverage.',
+      'Attendees gathered at the convention center for the official launch event.',
     ],
   },
   make: {
@@ -969,7 +1067,7 @@ const COLLOCATIONS = {
   },
 };
 
-function parsePosTranslations(data) {
+function parsePosTranslations(data, word = '') {
   const map = {};
   if (!data?.[1]) return map;
 
@@ -1016,9 +1114,18 @@ function parsePosTranslations(data) {
     }
   }
 
-  // 依照 POS_PRIORITY 排序
+  // 依照 POS_PRIORITY 排序（可被 WORD_POS_ORDER 覆寫）
+  const lowerWord = (word || '').toLowerCase();
+  const wordOrder = WORD_POS_ORDER[lowerWord] || {};
   const sorted = {};
   const entries = Object.entries(map).sort((a, b) => {
+    // 單字專屬排序優先
+    if (wordOrder[a[0]] !== undefined && wordOrder[b[0]] !== undefined) {
+      return wordOrder[a[0]] - wordOrder[b[0]];
+    }
+    if (wordOrder[a[0]] !== undefined) return -1;
+    if (wordOrder[b[0]] !== undefined) return 1;
+    // 否則使用全局 POS_PRIORITY
     const pa = POS_PRIORITY[a[0]] || 99;
     const pb = POS_PRIORITY[b[0]] || 99;
     return pa - pb;

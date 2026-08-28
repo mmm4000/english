@@ -983,16 +983,20 @@ function bindEvents() {
           console.log(`[AddWord Debug] 第一筆釋義 (first):`, first);
           $('#add-fields').style.display = 'block';
 
-          // 渲染動詞變化
+          // 渲染動詞變化（僅當選中動詞詞性時顯示）
           const verbFormsEl = document.getElementById('add-verb-forms');
           if (verbFormsEl) {
-            if (data.verb_forms) {
+            const isFirstVerb = first.partOfSpeech &&
+              (first.partOfSpeech.includes('動') || first.partOfSpeech.toLowerCase().includes('verb'));
+            if (data.verb_forms && isFirstVerb) {
               verbFormsEl.innerHTML = renderVerbFormsChips(data.verb_forms);
               verbFormsEl.querySelectorAll('[data-speak]').forEach(btn => {
                 btn.onclick = () => speak(btn.dataset.speak);
               });
+              verbFormsEl.style.display = '';
             } else {
               verbFormsEl.innerHTML = '';
+              verbFormsEl.style.display = 'none';
             }
           }
 
@@ -1117,6 +1121,24 @@ function bindEvents() {
         if (defInp) defInp.value = m.definition_en || '';
         if (exInp) exInp.value = m.example_en || '';
         if (exZhEl) exZhEl.textContent = m.example_zh || '';
+
+        // 動詞變化區塊：僅當選中動詞時顯示
+        const verbFormsEl = document.getElementById('add-verb-forms');
+        if (verbFormsEl) {
+          const isVerb = m.partOfSpeech &&
+            (m.partOfSpeech.includes('動') || m.partOfSpeech.toLowerCase().includes('verb'));
+          if (lookup.verb_forms && isVerb) {
+            verbFormsEl.innerHTML = renderVerbFormsChips(lookup.verb_forms);
+            verbFormsEl.querySelectorAll('[data-speak]').forEach(btn => {
+              btn.onclick = () => speak(btn.dataset.speak);
+            });
+            verbFormsEl.style.display = '';
+          } else {
+            verbFormsEl.innerHTML = '';
+            verbFormsEl.style.display = 'none';
+          }
+        }
+
         console.log(`[AddWord Debug] 切換後欄位回填:`, {
           example_en: m.example_en,
           example_zh: m.example_zh,
