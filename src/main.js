@@ -377,9 +377,8 @@ function renderAdd() {
 function renderMeaningOptionLabel(m) {
   let pos = m.partOfSpeech || '—';
   const zh = m.translation_zh || '';
-  // 防止重複前綴：若 pos 已包含 [xxx] 格式，先提取內部文字
-  const bracketMatch = pos.match(/^\[(.+)\]$/);
-  if (bracketMatch) pos = bracketMatch[1];
+  // 防止重複前綴：移除 pos 兩端的 [ ] 再重新包裝
+  pos = pos.replace(/^[\[\(]+/, '').replace(/[\]\)]+$/, '');
   if (!zh) return `[${pos}] 載入中…`;
   return `[${pos}] ${zh}`;
 }

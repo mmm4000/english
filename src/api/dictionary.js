@@ -1,3 +1,5 @@
+import { getVerbForms } from '../utils/conjugations.js';
+
 /**
  * 查詢單字的所有釋義（多詞性）與繁體中文辭典翻譯。
  * 回傳：
@@ -15,166 +17,81 @@ export async function lookupWord(rawWord) {
   console.log(`[Lookup Debug] 1. 開始查詢單字: "${word}"`);
   if (!word) throw new Error('請輸入單字');
 
-  // 並行請求三個來源
-  console.log(`[Lookup Debug] 2. 同時發起 Dictionary API (CORS proxy) + Datamuse + Google Translate 請求`);
-  const [dictData, datamuseData, transData] = await Promise.all([
-    fetchDictionary(word),
+  // 並行請求 Datamuse + Google Translate
+  console.log(`[Lookup Debug] 2. 同時發起 Datamuse + Google Translate 請求`);
+  const [datamuseData, transData] = await Promise.all([
     fetchDatamuse(word),
     fetchGoogleTranslate(word),
   ]);
 
-  // 解析各來源
-  console.log(`[Lookup Debug] 3. 解析各來源結果`);
-  const englishMeanings = extractEnglishMeanings(dictData);
-  const phonetic = extractPhonetic(dictData) || extractDatamusePhonetic(datamuseData);
-  const verbForms = extractVerbForms(dictData, word);
+  // 音標：Datamuse IPA 優先，Wiktionary 備用
+  console.log(`[Lookup Debug] 3. 取得音標`);
+  let phonetic = extractDatamuseIPA(datamuseData);
+  if (!phonetic) {
+    phonetic = await fetchWiktionaryPhonetic(word);
+  }
+  console.log(`[Lookup Debug] 3-1. 最終 phonetic:`, phonetic);
+
+  // 動詞變化：使用本地規則推導
+  console.log(`[Lookup Debug] 4. 推導動詞變化`);
+  const hasVerbPOS = hasVerbInGTX(transData);
+  const verbForms = hasVerbPOS ? getVerbForms(word) : null;
+  console.log(`[Lookup Debug] 4-1. hasVerbPOS:`, hasVerbPOS, `verbForms:`, verbForms);
+
+  // Datamuse 英文定義
   const datamuseDefs = extractDatamuseDefs(datamuseData);
-  console.log(`[Lookup Debug] 3-1. phonetic:`, phonetic);
-  console.log(`[Lookup Debug] 3-2. verbForms:`, verbForms);
-  console.log(`[Lookup Debug] 3-3. englishMeanings (Dictionary API):`, englishMeanings);
-  console.log(`[Lookup Debug] 3-4. datamuseDefs (Datamuse fallback):`, datamuseDefs);
+  console.log(`[Lookup Debug] 5. datamuseDefs:`, datamuseDefs);
 
-  // 解析 Google GTX 辭典結果
-  console.log(`[Lookup Debug] 4. 解析 Google GTX 辭典結果`);
+  // Google GTX 辭典
+  console.log(`[Lookup Debug] 6. 解析 Google GTX 辭典結果`);
   const posTranslations = parsePosTranslations(transData);
-  console.log(`[Lookup Debug] 4-1. parsePosTranslations 回傳:`, posTranslations);
+  console.log(`[Lookup Debug] 6-1. parsePosTranslations 回傳:`, posTranslations);
 
-  // 整合：以 Google GTX 詞性為骨架
-  console.log(`[Lookup Debug] 5. 執行 mergeMeanings 整合 (以 GTX 詞性為骨架)`);
-  const meanings = mergeMeanings(englishMeanings, datamuseDefs, posTranslations, word);
-  console.log(`[Lookup Debug] 5-1. mergeMeanings 最終結果:`, meanings);
+  // 整合
+  console.log(`[Lookup Debug] 7. 執行 mergeMeanings 整合`);
+  const meanings = mergeMeanings(datamuseDefs, posTranslations, word);
+  console.log(`[Lookup Debug] 7-1. mergeMeanings 最終結果:`, meanings);
 
   const result = { word, phonetic, verb_forms: verbForms, meanings };
-  console.log(`[Lookup Debug] 6. lookupWord 最終回傳:`, result);
+  console.log(`[Lookup Debug] 8. lookupWord 最終回傳:`, result);
   return result;
 }
 
-/* ─── Dictionary API (透過 CORS proxy) ─── */
-
-async function fetchDictionary(word) {
-  const target = `https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(word)}`;
-  const url = `https://corsproxy.io/?url=${encodeURIComponent(target)}`;
-  console.log(`[Lookup Debug] 2-A. 請求 Dictionary API (via corsproxy.io):`, url);
-  try {
-    const res = await fetch(url);
-    console.log(`[Lookup Debug] 2-A-1. Dictionary API HTTP 狀態碼:`, res.status, res.statusText);
-    if (!res.ok) {
-      console.warn(`[Lookup Debug] 2-A-2. Dictionary API 回傳非 200，略過`);
-      return null;
-    }
-    const data = await res.json();
-    console.log(`[Lookup Debug] 2-A-3. Dictionary API 原始 JSON (前 500 字元):`, JSON.stringify(data).slice(0, 500));
-    return data;
-  } catch (err) {
-    console.error(`[Lookup Debug] 2-A-4. Dictionary API 例外錯誤:`, err.message);
-    return null;
-  }
-}
-
-function extractPhonetic(data) {
-  if (!data || !data[0]) {
-    console.log(`[Lookup Debug] 3-A. extractPhonetic: 無 Dictionary 資料`);
-    return '';
-  }
-  const entry = data[0];
-  const result =
-    entry.phonetic ||
-    entry.phonetics?.find((p) => p.text)?.text ||
-    '';
-  console.log(`[Lookup Debug] 3-A. extractPhonetic: =>`, result);
-  return result;
-}
-
-function extractEnglishMeanings(data) {
-  if (!data || !data[0]) {
-    console.log(`[Lookup Debug] 3-B. extractEnglishMeanings: 無 Dictionary 資料，回傳空陣列`);
-    return [];
-  }
-  const results = [];
-  const seen = new Set();
-
-  for (const entry of data) {
-    for (const m of entry.meanings || []) {
-      const pos = m.partOfSpeech || '';
-      if (!pos || seen.has(pos)) continue;
-      seen.add(pos);
-
-      const def = m.definitions?.[0];
-      if (!def) continue;
-
-      results.push({
-        partOfSpeech: pos,
-        definition: def.definition || '',
-        example: def.example || '',
-      });
-    }
-  }
-  console.log(`[Lookup Debug] 3-B. extractEnglishMeanings: 共提取 ${results.length} 個詞性`, results);
-  return results;
-}
-
-function extractVerbForms(data, word) {
-  if (!data || !data[0]) {
-    console.log(`[Lookup Debug] 3-D. extractVerbForms: 無 Dictionary 資料`);
-    return null;
-  }
-  for (const entry of data) {
-    for (const m of entry.meanings || []) {
-      if (m.partOfSpeech !== 'verb') continue;
-      const forms = {};
-      for (const def of m.definitions || []) {
-        if (def.forms) {
-          for (const f of def.forms) {
-            if (f.form && f.form !== word) {
-              const label = (f.form || '').toLowerCase();
-              if (label.includes('past tense')) forms.past_tense = f.form;
-              else if (label.includes('past participle')) forms.past_participle = f.form;
-              else if (label.includes('present participle')) forms.present_participle = f.form;
-              else if (label.includes('third person singular')) forms.third = f.form;
-              else if (label.includes('plural')) forms.plural = f.form;
-            }
-          }
-        }
-      }
-      if (Object.keys(forms).length > 0) {
-        forms.base = word;
-        if (!forms.third) forms.third = word + 's';
-        if (!forms.past_tense) forms.past_tense = word + 'ed';
-        if (!forms.past_participle) forms.past_participle = word + 'ed';
-        if (!forms.present_participle) forms.present_participle = word + 'ing';
-        console.log(`[Lookup Debug] 3-D. extractVerbForms: 從 Dictionary API 提取到動詞變化`, forms);
-        return forms;
-      }
-    }
-  }
-  console.log(`[Lookup Debug] 3-D. extractVerbForms: Dictionary API 無動詞變化資料`);
-  return null;
-}
-
-/* ─── Datamuse API (備用英文辭典，無 CORS) ─── */
+/* ─── Datamuse API (主要來源，無 CORS) ─── */
 
 async function fetchDatamuse(word) {
-  const url = `https://api.datamuse.com/words?sp=${encodeURIComponent(word)}&md=d`;
-  console.log(`[Lookup Debug] 2-C. 請求 Datamuse API (fallback): ${url}`);
+  const url = `https://api.datamuse.com/words?sp=${encodeURIComponent(word)}&md=r,d,p&ipa=1&max=1`;
+  console.log(`[Lookup Debug] 2-A. 請求 Datamuse API: ${url}`);
   try {
     const res = await fetch(url);
-    console.log(`[Lookup Debug] 2-C-1. Datamuse HTTP 狀態碼:`, res.status, res.statusText);
-    if (!res.ok) {
-      console.warn(`[Lookup Debug] 2-C-2. Datamuse 回傳非 200`);
-      return null;
-    }
+    console.log(`[Lookup Debug] 2-A-1. Datamuse HTTP 狀態碼:`, res.status, res.statusText);
+    if (!res.ok) return null;
     const data = await res.json();
-    console.log(`[Lookup Debug] 2-C-3. Datamuse 原始回傳:`, data);
+    console.log(`[Lookup Debug] 2-A-2. Datamuse 原始回傳:`, data);
     return data;
   } catch (err) {
-    console.error(`[Lookup Debug] 2-C-4. Datamuse 例外錯誤:`, err.message);
+    console.error(`[Lookup Debug] 2-A-3. Datamuse 例外錯誤:`, err.message);
     return null;
   }
 }
 
-function extractDatamusePhonetic(data) {
+function extractDatamuseIPA(data) {
   if (!data || !data[0]) return '';
-  return data[0].soundsLike || '';
+  const item = data[0];
+  // 從 tags 中提取 ipa_pron
+  if (item.tags) {
+    for (const tag of item.tags) {
+      if (typeof tag === 'string' && tag.startsWith('ipa_pron:')) {
+        const ipa = tag.slice(9);
+        return ipa ? `/${ipa}/` : '';
+      }
+    }
+  }
+  // 備用：pronunciation
+  if (item.pronunciation) {
+    return `/${item.pronunciation}/`;
+  }
+  return '';
 }
 
 function extractDatamuseDefs(data) {
@@ -191,6 +108,33 @@ function extractDatamuseDefs(data) {
   }
   console.log(`[Lookup Debug] 3-C. extractDatamuseDefs:`, map);
   return map;
+}
+
+/* ─── Wiktionary REST API (音標備用，無 CORS) ─── */
+
+async function fetchWiktionaryPhonetic(word) {
+  const url = `https://en.wiktionary.org/api/rest_v1/page/definition/${encodeURIComponent(word)}`;
+  console.log(`[Lookup Debug] 3-B. 請求 Wiktionary (音標備用): ${url}`);
+  try {
+    const res = await fetch(url);
+    if (!res.ok) {
+      console.log(`[Lookup Debug] 3-B-1. Wiktionary 回傳非 200`);
+      return '';
+    }
+    const data = await res.json();
+    // 從 html 中提取 IPA：找到 /.../ 模式
+    const html = data?.en?.[0]?.definitions?.[0]?.definition || '';
+    const ipaMatch = html.match(/\/[^/]+\/|[^\s]*[ˈˌ][^\s]*/);
+    if (ipaMatch) {
+      const ipa = ipaMatch[0];
+      console.log(`[Lookup Debug] 3-B-2. Wiktionary 提取到音標:`, ipa);
+      return ipa.startsWith('/') ? ipa : `/${ipa}/`;
+    }
+    console.log(`[Lookup Debug] 3-B-3. Wiktionary 無音標資料`);
+  } catch (err) {
+    console.error(`[Lookup Debug] 3-B-4. Wiktionary 例外錯誤:`, err.message);
+  }
+  return '';
 }
 
 /* ─── Google Translate GTX ─── */
@@ -214,31 +158,35 @@ async function fetchGoogleTranslate(word) {
   }
 }
 
+function hasVerbInGTX(data) {
+  if (!data?.[1]) return false;
+  return data[1].some(g => (g[0] || '').toLowerCase() === '動詞' || (g[0] || '').toLowerCase() === 'verb');
+}
+
 function parsePosTranslations(data) {
   const map = {};
   if (!data?.[1]) {
-    console.log(`[Lookup Debug] 4-A. parsePosTranslations: data[1] 不存在，回傳空物件`);
+    console.log(`[Lookup Debug] 6-A. parsePosTranslations: data[1] 不存在，回傳空物件`);
     return map;
   }
 
-  console.log(`[Lookup Debug] 4-A. parsePosTranslations: data[1] 共 ${data[1].length} 組詞性群組`);
+  console.log(`[Lookup Debug] 6-A. parsePosTranslations: data[1] 共 ${data[1].length} 組詞性群組`);
   for (const group of data[1]) {
     const rawPos = group[0] || '';
     const terms = group[1];
-    // 判斷是否為中文 POS，若是則保留原文，否則 toLowerCase
     const pos = /[\u4e00-\u9fff]/.test(rawPos) ? rawPos : rawPos.toLowerCase();
-    console.log(`[Lookup Debug] 4-A-1. 詞性群組: pos="${pos}", terms=`, terms);
+    console.log(`[Lookup Debug] 6-A-1. 詞性群組: pos="${pos}", terms=`, terms);
     if (!pos || !Array.isArray(terms)) continue;
 
     const zhTerms = terms
       .filter((t) => typeof t === 'string' && t.trim())
       .slice(0, 3);
-    console.log(`[Lookup Debug] 4-A-2. 篩選後 zhTerms (前3個):`, zhTerms);
+    console.log(`[Lookup Debug] 6-A-2. 篩選後 zhTerms (前3個):`, zhTerms);
     if (zhTerms.length > 0) {
       map[pos] = zhTerms;
     }
   }
-  console.log(`[Lookup Debug] 4-A-3. parsePosTranslations 最終結果:`, map);
+  console.log(`[Lookup Debug] 6-A-3. parsePosTranslations 最終結果:`, map);
   return map;
 }
 
@@ -282,40 +230,28 @@ function autoGenerateExample(word, posKey) {
   return `The word "${word}" is important.`;
 }
 
-function mergeMeanings(englishMeanings, datamuseDefs, posTranslations, word) {
+function mergeMeanings(datamuseDefs, posTranslations, word) {
   const gtxKeys = Object.keys(posTranslations);
-  console.log(`[Lookup Debug] 5-A. mergeMeanings: gtxKeys=`, gtxKeys, `englishMeanings=`, englishMeanings.length, `筆`);
-
-  const dictByPos = {};
-  for (const em of englishMeanings) {
-    dictByPos[em.partOfSpeech.toLowerCase()] = em;
-  }
+  console.log(`[Lookup Debug] 7-A. mergeMeanings: gtxKeys=`, gtxKeys);
 
   if (gtxKeys.length > 0) {
-    console.log(`[Lookup Debug] 5-B. mergeMeanings: 以 GTX 詞性為骨架 (共 ${gtxKeys.length} 個詞性)`);
+    console.log(`[Lookup Debug] 7-B. mergeMeanings: 以 GTX 詞性為骨架 (共 ${gtxKeys.length} 個詞性)`);
     const merged = gtxKeys.map((posKey) => {
       const zhTerms = posTranslations[posKey];
       const translation = zhTerms ? zhTerms.join('、') : '';
       const zhPosLabel = mapPos(posKey);
 
+      // Datamuse 英文定義
       const enPosKey = REVERSE_POS_MAP[posKey] || posKey.toLowerCase();
-      const dictEntry = dictByPos[enPosKey] || dictByPos[posKey.toLowerCase()];
-      let definition = dictEntry?.definition || '';
-      let example = dictEntry?.example || '';
+      let definition = datamuseDefs[enPosKey] || '';
 
-      if (!definition && datamuseDefs[enPosKey]) {
-        definition = datamuseDefs[enPosKey];
-      }
-
-      if (!example && word) {
-        example = autoGenerateExample(word, posKey);
-      }
+      const example = word ? autoGenerateExample(word, posKey) : '';
 
       if (!definition && translation) {
         definition = `[${zhPosLabel}] ${translation}`;
       }
 
-      console.log(`[Lookup Debug] 5-C. posKey="${posKey}" enPosKey="${enPosKey}" => translation="${translation}", definition="${definition.slice(0, 60)}", example="${example.slice(0, 50)}"`);
+      console.log(`[Lookup Debug] 7-C. posKey="${posKey}" => translation="${translation}", definition="${definition.slice(0, 60)}"`);
       return {
         partOfSpeech: zhPosLabel,
         translation,
@@ -323,27 +259,11 @@ function mergeMeanings(englishMeanings, datamuseDefs, posTranslations, word) {
         example,
       };
     });
-    console.log(`[Lookup Debug] 5-D. mergeMeanings GTX 骨架整合完成，共 ${merged.length} 筆`, merged);
+    console.log(`[Lookup Debug] 7-D. mergeMeanings 完成，共 ${merged.length} 筆`, merged);
     return merged;
   }
 
-  if (englishMeanings.length > 0) {
-    console.log(`[Lookup Debug] 5-E. mergeMeanings: 無 GTX 詞性，退回 englishMeanings 骨架`);
-    return englishMeanings.map((em) => {
-      const posKey = em.partOfSpeech.toLowerCase();
-      const zhTerms = posTranslations[posKey];
-      const translation = zhTerms ? zhTerms.join('、') : '';
-      const example = em.example || (word ? autoGenerateExample(word, posKey) : '');
-      return {
-        partOfSpeech: mapPos(em.partOfSpeech),
-        translation,
-        definition: em.definition,
-        example,
-      };
-    });
-  }
-
-  console.log(`[Lookup Debug] 5-F. mergeMeanings: 完全無資料，產生保底項`);
+  console.log(`[Lookup Debug] 7-E. mergeMeanings: 無 GTX 資料，產生保底項`);
   return [
     {
       partOfSpeech: '',
