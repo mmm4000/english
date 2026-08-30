@@ -1127,13 +1127,17 @@ function bindEvents() {
           await translateMeaningOnDemand(m, lookup.word);
         }
 
-        // 重新生成對應詞性的語境例句
-        const enSentence = getSmartSentence(lookup.word, m.pos, lookup.verb_forms);
-        m.exampleEn = enSentence;
-        m.exampleZh = await translateSentence(enSentence);
-        // 回寫到原始物件
-        lookup.meanings[idx].exampleEn = m.exampleEn;
-        lookup.meanings[idx].exampleZh = m.exampleZh;
+        // 僅在該 meaning 缺少例句時才生成新例句
+        if (!m.exampleEn || !m.exampleZh) {
+          const enSentence = getSmartSentence(lookup.word, m.pos, lookup.verb_forms);
+          m.exampleEn = m.exampleEn || enSentence;
+          if (!m.exampleZh) {
+            m.exampleZh = await translateSentence(m.exampleEn);
+          }
+          // 回寫到原始物件
+          lookup.meanings[idx].exampleEn = m.exampleEn;
+          lookup.meanings[idx].exampleZh = m.exampleZh;
+        }
 
         const phonInp = document.getElementById('inp-phonetic');
         const zhInp = document.getElementById('inp-zh');
